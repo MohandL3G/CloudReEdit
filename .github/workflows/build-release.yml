@@ -1,0 +1,47 @@
+name: Build & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to tag the release (e.g. 0.1.0)'
+        required: false
+        default: '0.1.0'
+      release_notes:
+        description: 'Optional release notes (plain text)'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish (single-file exe)
+        run: dotnet publish ui/CloudReEdit.csproj -c Release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CloudReEdit
+          path: ui/bin/Release/net8.0-windows/win-x64/publish/CloudReEdit.exe
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          NOTES: ${{ inputs.release_notes }}
+        run: |
+          gh release create "v$env:VERSION" `
+            "ui/bin/Release/net8.0-windows/win-x64/publish/CloudReEdit.exe" `
+            --title "CloudReEdit v$env:VERSION" `
+            --generate-notes
