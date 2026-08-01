@@ -1,0 +1,88 @@
+<Page x:Class="CloudReEdit.Pages.GamesPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      ScrollViewer.CanContentScroll="False">
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="Games"
+                       FontSize="28" FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+            <ui:Button Grid.Column="1" VerticalAlignment="Center"
+                       Appearance="Secondary"
+                       Content="Back to Accounts"
+                       Click="Back_Click" />
+        </Grid>
+
+        <TextBlock x:Name="AccountText"
+                   Grid.Row="1"
+                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                   Margin="0,4,0,12" />
+
+        <ui:TextBox x:Name="SearchBox"
+                    Grid.Row="2"
+                    PlaceholderText="Search games..."
+                    Width="250" HorizontalAlignment="Left"
+                    TextChanged="SearchBox_TextChanged"
+                    Margin="0,0,0,12" />
+
+        <TextBlock x:Name="EmptyText"
+                   Grid.Row="3"
+                   Text="No games found in the local stats folder."
+                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                   Visibility="Collapsed" />
+
+        <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto">
+            <ItemsControl x:Name="GameList">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                                BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                                BorderThickness="1" CornerRadius="6"
+                                Padding="16,10" Margin="0,0,0,6">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Name}"
+                                               FontSize="15" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                                    <TextBlock Text="{Binding PlaytimeDisplay}"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <TextBlock Text="{Binding LastPlayedDisplay}"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1"
+                                            Orientation="Horizontal"
+                                            VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding AppId}"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,12,0" />
+                                    <ui:Button Content="Edit"
+                                               Appearance="Primary"
+                                               Tag="{Binding}"
+                                               Click="Edit_Click" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</Page>

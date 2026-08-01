@@ -1,0 +1,32 @@
+# .NET build output
+bin/
+obj/
+publish/
+out/
+
+# Visual Studio / Rider
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+
+# NuGet
+*.nupkg
+*.snupkg
+
+# Logs
+*.log
+
+# Local runtime config / app data
+*.runtimeconfig.dev.json
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
