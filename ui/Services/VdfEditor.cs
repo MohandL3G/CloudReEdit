@@ -17,7 +17,7 @@ public static class VdfEditor
         new(@"^(\s*)""([^""]+)""(\s*)$", RegexOptions.Compiled);
 
     public static bool PatchAppPlaytime(string vdfPath, string appId,
-        long playtime, long lastPlayed)
+        long playtime, long playtime2Weeks, long lastPlayed)
     {
         string raw = File.ReadAllText(vdfPath);
         bool crlf = raw.Contains("\r\n");
@@ -63,7 +63,7 @@ public static class VdfEditor
                     }
                     if (key == "Playtime2wks")
                     {
-                        result.Add($"{indent}\"Playtime2wks\"\t\t\"{playtime}\"{nl}");
+                        result.Add($"{indent}\"Playtime2wks\"\t\t\"{playtime2Weeks}\"{nl}");
                         continue;
                     }
                 }
@@ -82,10 +82,18 @@ public static class VdfEditor
         return true;
     }
 
-    public static bool TryGetAppValues(string vdfPath, string appId,
-        out long playtime, out long lastPlayed)
+    public static bool AppBlockExists(string vdfPath, string appId)
+    {
+        if (!File.Exists(vdfPath)) return false;
+        var lines = File.ReadAllLines(vdfPath);
+        return FindAppBlock(lines, appId) != null;
+    }
+
+    public static bool TryGetAppPlaytimeValues(string vdfPath, string appId,
+        out long playtime, out long playtime2Weeks, out long lastPlayed)
     {
         playtime = 0;
+        playtime2Weeks = 0;
         lastPlayed = 0;
         if (!File.Exists(vdfPath)) return false;
 
@@ -103,12 +111,46 @@ public static class VdfEditor
                     playtime = p;
                     found = true;
                     break;
+                case "Playtime2wks" when long.TryParse(value, out var p2):
+                    playtime2Weeks = p2;
+                    break;
                 case "LastPlayed" when long.TryParse(value, out var lp):
                     lastPlayed = lp;
                     break;
             }
         }
         return found;
+    }
+
+    /// <summary>True when the only difference between <paramref name="beforeRaw"/>
+    /// and <paramref name="afterRaw"/> lies inside the target app block, i.e. the
+    /// patch touched nothing unrelated. Both texts must be the same file before
+    /// and after a <see cref="PatchAppPlaytime"/> call.</summary>
+    public static bool UnrelatedContentUnchanged(string beforeRaw, string afterRaw, string appId)
+    {
+        if (beforeRaw == afterRaw) return true;
+
+        var beforeLines = beforeRaw.Split('\n');
+        var afterLines = afterRaw.Split('\n');
+        var beforeBlock = FindAppBlock(beforeLines, appId);
+        var afterBlock = FindAppBlock(afterLines, appId);
+        if (beforeBlock == null || afterBlock == null || beforeBlock.Value.Start != afterBlock.Value.Start)
+            return false;
+
+        for (int i = 0; i < beforeBlock.Value.Start; i++)
+            if (beforeLines[i] != afterLines[i])
+                return false;
+
+        int beforeLen = beforeLines.Length;
+        int afterLen = afterLines.Length;
+        if (beforeLen - beforeBlock.Value.End != afterLen - afterBlock.Value.End)
+            return false;
+
+        for (int i = 0; i < beforeLen - beforeBlock.Value.End - 1; i++)
+            if (beforeLines[beforeBlock.Value.End + 1 + i] != afterLines[afterBlock.Value.End + 1 + i])
+                return false;
+
+        return true;
     }
 
     private static (int Start, int End, string BraceIndent)? FindAppBlock(

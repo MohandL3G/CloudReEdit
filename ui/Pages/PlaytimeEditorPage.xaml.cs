@@ -22,6 +22,7 @@ public partial class PlaytimeEditorPage : Page
         InitializeComponent();
 
         Loaded += async (_, _) => await LoadAsync();
+        Unloaded += (_, _) => (_provider as IDisposable)?.Dispose();
     }
 
     private async Task LoadAsync()
@@ -41,6 +42,7 @@ public partial class PlaytimeEditorPage : Page
         var appId = AppState.AppId.Value;
 
         _ctx = await PlaytimeService.LoadAsync(accountId, appId);
+        (_provider as IDisposable)?.Dispose();
         _provider = BuildProvider();
 
         GameTitleText.Text = AppState.GameName ?? $"App {appId}";
@@ -209,25 +211,102 @@ public partial class PlaytimeEditorPage : Page
         SaveButton.IsEnabled = false;
         try
         {
-            var result = await PlaytimeService.SaveAsync(_ctx, _provider, total, lastPlayed);
-            if (result.Success)
-            {
-                ResultBar.Severity = Wpf.Ui.Controls.InfoBarSeverity.Success;
-                ResultBar.Title = $"Saved {total} min ({total / 60.0:0.##} h)";
-                ResultBar.Message = string.Join(" + ", result.Written);
-            }
-            else
-            {
-                ResultBar.Severity = Wpf.Ui.Controls.InfoBarSeverity.Error;
-                ResultBar.Title = "Save failed";
-                ResultBar.Message = result.Error ?? "Unknown error.";
-            }
-            ResultBar.IsOpen = true;
+            var report = await PlaytimeService.SaveAsync(_ctx, total, lastPlayed);
+            if (report.Outcome is SaveOutcome.SavedVerified or SaveOutcome.SavedUnverified)
+                await LoadAsync();
+            ApplyReport(report, total);
         }
         finally
         {
             SaveButton.IsEnabled = true;
         }
+    }
+
+    private void ApplyReport(SaveReport report, long total)
+    {
+        string backupNote = string.IsNullOrEmpty(report.BackupDir)
+            ? ""
+            : $"\nBackups: {report.BackupDir}";
+        string details = report.Messages.Count > 0
+            ? string.Join(" ", report.Messages)
+            : "";
+        if (!string.IsNullOrEmpty(details)) details += "\n";
+        details += backupNote;
+
+        var verified = report.Copies
+            .Where(c => c.State == CopyState.Verified)
+            .Select(c => c.Target switch
+            {
+                CopyTarget.Vdf => "localconfig.vdf",
+                CopyTarget.LocalJson => "local stats JSON",
+                _ => $"cloud ({_ctx?.CloudProviderName ?? "cloud"})",
+            })
+            .ToList();
+
+        string written = verified.Count > 0
+            ? $"{string.Join(" + ", verified)} written."
+            : "Nothing was written.";
+
+        (ResultBar.Severity, ResultBar.Title, ResultBar.Message) = report.Outcome switch
+        {
+            SaveOutcome.SavedVerified => (Wpf.Ui.Controls.InfoBarSeverity.Success,
+                $"Saved {total} min ({total / 60.0:0.##} h)",
+                written),
+            SaveOutcome.SavedUnverified => (Wpf.Ui.Controls.InfoBarSeverity.Warning,
+                "Saved (cloud unverified)",
+                string.Join("; ", report.Copies.Select(CopySummary)) + ". " + details),
+            SaveOutcome.NotSaved => (Wpf.Ui.Controls.InfoBarSeverity.Error,
+                "Save aborted",
+                string.IsNullOrEmpty(details) ? "No files were changed." : details),
+            SaveOutcome.BackupFailed => (Wpf.Ui.Controls.InfoBarSeverity.Error,
+                "Backup failed",
+                "No files were changed. " + details),
+            SaveOutcome.PartialRolledBack => (Wpf.Ui.Controls.InfoBarSeverity.Warning,
+                "Changes rolled back",
+                details),
+            SaveOutcome.RollbackFailed => (Wpf.Ui.Controls.InfoBarSeverity.Error,
+                "Rollback incomplete",
+                details),
+            SaveOutcome.CloudChangedConcurrently => (Wpf.Ui.Controls.InfoBarSeverity.Warning,
+                "Cloud changed concurrently",
+                details),
+            SaveOutcome.CloudStateUnknown => (Wpf.Ui.Controls.InfoBarSeverity.Warning,
+                "Cloud state unknown",
+                details),
+            SaveOutcome.CloudDiverged => (Wpf.Ui.Controls.InfoBarSeverity.Error,
+                "Cloud diverged",
+                details),
+            SaveOutcome.CloudWriteFailed => (Wpf.Ui.Controls.InfoBarSeverity.Error,
+                "Cloud write failed",
+                details),
+            _ => (Wpf.Ui.Controls.InfoBarSeverity.Error, "Save failed", details),
+        };
+        ResultBar.IsOpen = true;
+    }
+
+    private string CopySummary(CopyStatus c)
+    {
+        string name = c.Target switch
+        {
+            CopyTarget.Vdf => "localconfig.vdf",
+            CopyTarget.LocalJson => "local stats JSON",
+            _ => $"cloud ({_ctx?.CloudProviderName ?? "cloud"})",
+        };
+        string verb = c.State switch
+        {
+            CopyState.Verified => "verified",
+            CopyState.SkippedAbsentVdf => "absent (skipped)",
+            CopyState.SkippedReadOnlyCloud => "read-only (skipped)",
+            CopyState.WriteFailed => "write failed",
+            CopyState.Unverified => "value written, result unverified",
+            CopyState.Divergent => "diverged (concurrent change preserved)",
+            CopyState.RolledBack => "rolled back",
+            CopyState.RestoreFailed => "restore failed",
+            CopyState.NotAttempted => "not attempted",
+            CopyState.Written => "written",
+            _ => c.State.ToString().ToLowerInvariant(),
+        };
+        return $"{name}: {verb}";
     }
 
     private async void Reload_Click(object sender, RoutedEventArgs e)

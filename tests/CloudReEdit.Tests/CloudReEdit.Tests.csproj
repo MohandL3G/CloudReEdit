@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>CloudReEdit.Tests</RootNamespace>
+    <!-- CloudCredentials.cs uses DPAPI (Windows-only); the tests only exercise the
+         plaintext JSON path, so platform analysis is suppressed here. -->
+    <NoWarn>$(NoWarn);CA1416;CS8600</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The app itself targets net8.0-windows/WPF and cannot run outside Windows.
+         These tests exercise the pure playtime model, the VDF editor and the save
+         transaction, so those files are compiled into this project directly
+         instead of referencing the WPF assembly. -->
+    <Compile Include="../../ui/Services/PlaytimeModel.cs" Link="Source/PlaytimeModel.cs" />
+    <Compile Include="../../ui/Services/VdfEditor.cs" Link="Source/VdfEditor.cs" />
+    <Compile Include="../../ui/Services/FileUtils.cs" Link="Source/FileUtils.cs" />
+    <Compile Include="../../ui/Services/SaveReportModel.cs" Link="Source/SaveReportModel.cs" />
+    <Compile Include="../../ui/Services/BackupManifest.cs" Link="Source/BackupManifest.cs" />
+    <Compile Include="../../ui/Services/SaveTransaction.cs" Link="Source/SaveTransaction.cs" />
+    <Compile Include="../../ui/Services/Cloud/ICloudProvider.cs" Link="Source/Cloud/ICloudProvider.cs" />
+    <Compile Include="../../ui/Services/Cloud/FolderProvider.cs" Link="Source/Cloud/FolderProvider.cs" />
+    <Compile Include="../../ui/Services/Cloud/S3Provider.cs" Link="Source/Cloud/S3Provider.cs" />
+    <Compile Include="../../ui/Services/Cloud/CloudCredentials.cs" Link="Source/Cloud/CloudCredentials.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

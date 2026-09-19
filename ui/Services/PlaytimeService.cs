@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using CloudReEdit.Services.Cloud;
@@ -27,13 +25,6 @@ public sealed class EditorContext
     public List<string> Warnings { get; } = new();
 }
 
-public sealed class SaveResult
-{
-    public bool Success { get; set; }
-    public List<string> Written { get; } = new();
-    public string? Error { get; set; }
-}
-
 public static class PlaytimeService
 {
     public static async Task<EditorContext> LoadAsync(string accountId, uint appId)
@@ -47,7 +38,8 @@ public static class PlaytimeService
                 : null);
 
         var vdfPath = LocalStatsStore.VdfPath(accountId);
-        if (VdfEditor.TryGetAppValues(vdfPath, appId.ToString(), out var vp, out var vl))
+        if (VdfEditor.TryGetAppPlaytimeValues(vdfPath, appId.ToString(),
+            out var vp, out _, out var vl))
         {
             ctx.VdfPlaytime = vp;
             ctx.VdfLastPlayed = vl;
@@ -67,9 +59,10 @@ public static class PlaytimeService
                 ctx.CloudCanWrite = provider.CanWrite;
                 try
                 {
-                    var blob = await provider.GetAccountStatsAsync(accountId).ConfigureAwait(false);
-                    ctx.CloudExists = blob != null;
-                    if (blob?.TryGetPropertyValue(appId.ToString(), out var appEl) == true &&
+                    var fetch = await provider.GetAccountStatsAsync(accountId).ConfigureAwait(false);
+                    ctx.CloudExists = fetch.Exists;
+                    if (fetch.Exists &&
+                        fetch.Parsed?.TryGetPropertyValue(appId.ToString(), out var appEl) == true &&
                         appEl is JsonObject appObj &&
                         appObj.TryGetPropertyValue("playtime", out var cloudPt) &&
                         cloudPt is JsonObject cloudPto)
@@ -80,6 +73,10 @@ public static class PlaytimeService
                 catch (Exception ex)
                 {
                     ctx.CloudError = ex.Message;
+                }
+                finally
+                {
+                    (provider as IDisposable)?.Dispose();
                 }
             }
         }
@@ -98,87 +95,53 @@ public static class PlaytimeService
                 $"Cloud shows {ctx.Cloud.Total} min, local JSON shows {ctx.Local.Total} min. Saving rewrites both consistently.");
     }
 
-    /// <summary>Backs up all three copies, then writes them consistently at
-    /// <paramref name="targetTotal"/> minutes.</summary>
-    public static async Task<SaveResult> SaveAsync(EditorContext ctx,
-        ICloudProvider? provider, long targetTotal, long lastPlayed)
+    /// <summary>Runs the full multi-copy save protocol for
+    /// <paramref name="targetTotal"/> minutes at the given last-played timestamp.
+    /// The cloud provider is created here (during pre-flight) so a bad or missing
+    /// provider aborts before any file is touched.</summary>
+    public static async Task<SaveReport> SaveAsync(EditorContext ctx,
+        long targetTotal, long lastPlayed)
     {
-        var result = new SaveResult();
+        bool steamRunning = SteamDetector.IsSteamRunning();
+
+        ICloudProvider? provider = null;
+        var cfg = SteamDetector.ReadConfig();
+        if (cfg != null)
+        {
+            var (created, error) = CloudProviderFactory.Create(cfg);
+            if (created == null)
+            {
+                var report = new SaveReport { Outcome = SaveOutcome.NotSaved };
+                report.Messages.Add(error ?? "Cloud provider could not be created. No files were changed.");
+                return report;
+            }
+            provider = created;
+        }
+
+        var paths = new SavePaths
+        {
+            LocalStatsPath = LocalStatsStore.AppStatsPath(ctx.AccountId, ctx.AppId),
+            VdfPath = LocalStatsStore.VdfPath(ctx.AccountId),
+            BackupRoot = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "CloudReEdit", "backups"),
+        };
+
+        var txn = new SaveTransaction(new SaveScope
+        {
+            AccountId = ctx.AccountId,
+            AppId = ctx.AppId,
+            Source = ctx.Local,
+        }, paths,
+            provider != null && provider.CanWrite ? provider : null,
+            targetTotal, lastPlayed, steamRunning);
         try
         {
-            var model = ctx.Local;
-            model.AdjustBucketsToTotal(targetTotal);
-            model.LastPlayed = lastPlayed;
-            model.Minutes2Weeks = model.Total;
-
-            var backupDir = CreateBackupDir();
-
-            // 1. Local app stats JSON
-            var local = LocalStatsStore.ReadAppStats(ctx.AccountId, ctx.AppId) ?? new JsonObject();
-            Backup(local, Path.Combine(backupDir, "local_app.json"));
-            local["playtime"] = model.ToJson();
-            LocalStatsStore.WriteAppStats(ctx.AccountId, ctx.AppId, local);
-            result.Written.Add("Local stats JSON");
-
-            // 2. Cloud account blob
-            if (provider != null && provider.CanWrite)
-            {
-                var blob = await provider.GetAccountStatsAsync(ctx.AccountId).ConfigureAwait(false);
-                if (blob == null) blob = new JsonObject();
-                Backup(blob, Path.Combine(backupDir, "cloud_stats.json"));
-                var appKey = ctx.AppId.ToString();
-                var appObj = blob[appKey] as JsonObject;
-                if (appObj == null)
-                {
-                    appObj = new JsonObject();
-                    blob[appKey] = appObj;
-                }
-                appObj["playtime"] = model.ToJson();
-                await provider.PutAccountStatsAsync(ctx.AccountId, blob).ConfigureAwait(false);
-                result.Written.Add($"Cloud ({provider.DisplayName})");
-            }
-
-            // 3. localconfig.vdf
-            var vdfPath = LocalStatsStore.VdfPath(ctx.AccountId);
-            if (File.Exists(vdfPath))
-            {
-                BackupFile(vdfPath, Path.Combine(backupDir, "localconfig.vdf"));
-                if (!VdfEditor.PatchAppPlaytime(vdfPath, ctx.AppId.ToString(), model.Total, lastPlayed))
-                    throw new InvalidOperationException(
-                        $"Could not find app {ctx.AppId} block in {vdfPath}. No files were changed.");
-            }
-
-            result.Success = true;
+            return await txn.RunAsync().ConfigureAwait(false);
         }
-        catch (Exception ex)
+        finally
         {
-            result.Error = ex.Message;
+            (provider as IDisposable)?.Dispose();
         }
-
-        return result;
-    }
-
-    private static string CreateBackupDir()
-    {
-        var root = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "CloudReEdit", "backups", DateTime.Now.ToString("yyyyMMdd_HHmmss"));
-        Directory.CreateDirectory(root);
-        return root;
-    }
-
-    private static void BackupFile(string source, string dest)
-    {
-        try { FileUtils.AtomicCopy(source, dest); } catch { }
-    }
-
-    private static void Backup(JsonNode node, string dest)
-    {
-        try
-        {
-            FileUtils.AtomicWriteAllText(dest,
-                node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch { }
     }
 }

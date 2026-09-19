@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
@@ -44,6 +45,18 @@ public sealed class DevicePlaytime : INotifyPropertyChanged
     public long Sum => _windows + _mac + _linux;
     public bool IsSynthetic => Name.StartsWith("__", System.StringComparison.Ordinal);
 
+    /// <summary>CloudRedirect daily playtime history for this device: unix day
+    /// index (timestamp / 86400) -&gt; minutes. Compatibility data preserved
+    /// verbatim; never edited in the UI. Synthetic buckets have none.</summary>
+    public Dictionary<long, long> Days { get; } = new();
+
+    /// <summary>True when this device carries a <c>days</c> property at all,
+    /// even when it is empty. Mirrors CloudRedirect, where the presence of the
+    /// object alone establishes day tracking.</summary>
+    public bool DaysTracked => _daysPropertyPresent || Days.Count > 0;
+
+    internal bool _daysPropertyPresent;
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     private void OnPropertyChanged([CallerMemberName] string? name = null)
@@ -67,6 +80,44 @@ public sealed class PlaytimeModel
     public long LinuxSum => PerDevice.Sum(d => d.Linux);
     public long Total => WindowsSum + MacSum + LinuxSum;
 
+    // Mirrors CloudRedirect day tracking (stats_store.cpp:1144-1228): a day
+    // index is (unix timestamp / 86400) and the two-week value is the sum of the
+    // day buckets that fall inside the rolling 14-day window.
+    internal const long SecondsPerDay = 24L * 60 * 60;
+    internal const int TwoWeekDays = 14;
+    internal const long TwoWeekWindowSeconds = TwoWeekDays * SecondsPerDay;
+
+    /// <summary>True when at least one device carries a <c>days</c> property,
+    /// even one that is currently empty.</summary>
+    public bool HasDayTracking => PerDevice.Any(d => d.DaysTracked);
+
+    /// <summary>CloudRedirect-compatible two-week total. When day tracking exists
+    /// it is the sum of per-device day buckets inside the current 14-day window
+    /// (expired and future days excluded), capped at the lifetime total. Otherwise
+    /// it is the legacy behavior: the full lifetime total.</summary>
+    /// <param name="nowUnix">Fixed unix timestamp for deterministic tests;
+    /// defaults to the current time.</param>
+    public long CalculateCloudRedirectTwoWeekTotal(long? nowUnix = null)
+    {
+        if (!HasDayTracking) return Total;
+
+        long now = nowUnix ?? System.DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        long cutoff = now - TwoWeekWindowSeconds;
+        long maxDay = now / SecondsPerDay + 1;
+
+        long sum = 0;
+        foreach (var device in PerDevice)
+        {
+            foreach (var (day, minutes) in device.Days)
+            {
+                long dayEnd = day * SecondsPerDay + SecondsPerDay;
+                if (dayEnd <= cutoff || day > maxDay) continue;
+                sum += minutes;
+            }
+        }
+        return System.Math.Min(sum, Total);
+    }
+
     public static PlaytimeModel Parse(JsonObject? pt)
     {
         var m = new PlaytimeModel();
@@ -82,13 +133,25 @@ public sealed class PlaytimeModel
             foreach (var (name, val) in pdo)
             {
                 if (val is not JsonObject dv) continue;
-                m.PerDevice.Add(new DevicePlaytime
+                var device = new DevicePlaytime
                 {
                     Name = name,
                     Windows = GetLong(dv["windows"]),
                     Mac = GetLong(dv["mac"]),
                     Linux = GetLong(dv["linux"]),
-                });
+                };
+                if (dv.TryGetPropertyValue("days", out var days) && days is JsonObject daysObj)
+                {
+                    device._daysPropertyPresent = true;
+                    foreach (var (dayKey, minutes) in daysObj)
+                    {
+                        if (minutes == null) continue;
+                        if (long.TryParse(dayKey, NumberStyles.Integer,
+                                          CultureInfo.InvariantCulture, out var day))
+                            device.Days[day] = GetLong(minutes);
+                    }
+                }
+                m.PerDevice.Add(device);
             }
         }
 
@@ -100,12 +163,20 @@ public sealed class PlaytimeModel
         var perDev = new JsonObject();
         foreach (var d in PerDevice)
         {
-            perDev[d.Name] = new JsonObject
+            var device = new JsonObject
             {
                 ["windows"] = System.Math.Max(0, d.Windows),
                 ["mac"] = System.Math.Max(0, d.Mac),
                 ["linux"] = System.Math.Max(0, d.Linux),
             };
+            if (d.DaysTracked)
+            {
+                var days = new JsonObject();
+                foreach (var (day, minutes) in d.Days)
+                    days[day.ToString(CultureInfo.InvariantCulture)] = minutes;
+                device["days"] = days;
+            }
+            perDev[d.Name] = device;
         }
 
         return new JsonObject
@@ -118,6 +189,36 @@ public sealed class PlaytimeModel
             ["linux"] = LinuxSum,
             ["per_device"] = perDev,
         };
+    }
+
+    /// <summary>Deep equality on every field a save depends on: lifetime total
+    /// (derived from buckets), per-device cells, day-tracking state, the verbatim
+    /// day buckets, two-week total and last_played. Used to verify a written copy
+    /// matches the intended state.</summary>
+    public bool SemanticallyEquals(PlaytimeModel? other)
+    {
+        if (other == null) return false;
+        if (Total != other.Total) return false;
+        if (Minutes2Weeks != other.Minutes2Weeks) return false;
+        if (LastPlayed != other.LastPlayed) return false;
+        if (HasDayTracking != other.HasDayTracking) return false;
+        if (PerDevice.Count != other.PerDevice.Count) return false;
+
+        foreach (var d in PerDevice)
+        {
+            var otherDev = other.PerDevice.FirstOrDefault(o => o.Name == d.Name);
+            if (otherDev == null) return false;
+            if (d.Windows != otherDev.Windows || d.Mac != otherDev.Mac || d.Linux != otherDev.Linux)
+                return false;
+            if (d.DaysTracked != otherDev.DaysTracked) return false;
+            if (d.Days.Count != otherDev.Days.Count) return false;
+            foreach (var (day, minutes) in d.Days)
+            {
+                if (!otherDev.Days.TryGetValue(day, out var otherMinutes) || otherMinutes != minutes)
+                    return false;
+            }
+        }
+        return true;
     }
 
     private static long GetLong(JsonNode? node)
