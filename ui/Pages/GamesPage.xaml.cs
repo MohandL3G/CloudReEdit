@@ -30,7 +30,7 @@ public partial class GamesPage : Page
         if (string.IsNullOrEmpty(AppState.AccountId))
         {
             GameList.ItemsSource = null;
-            EmptyText.Text = "Pick an account on the Accounts page first.";
+            EmptyText.Text = GameListEmptyState.PickAccount;
             EmptyText.Visibility = Visibility.Visible;
             return;
         }
@@ -75,7 +75,10 @@ public partial class GamesPage : Page
         }
 
         if (_view != null)
+        {
             _view.Refresh();
+            UpdateEmptyState();
+        }
     }
 
     private void UpdateFilter()
@@ -94,7 +97,21 @@ public partial class GamesPage : Page
                  g.AppId.ToString().Contains(query));
         }
 
-        EmptyText.Visibility = _games.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        UpdateEmptyState();
+    }
+
+    // The banner follows the FILTERED view, so a search that matches nothing is
+    // its own state (as long as a search is active), distinct from an account
+    // that simply has no games.
+    private void UpdateEmptyState()
+    {
+        var message = GameListEmptyState.For(
+            accountSelected: !string.IsNullOrEmpty(AppState.AccountId),
+            totalGames: _games.Count,
+            shownGames: _view?.Count ?? 0,
+            query: SearchBox.Text ?? "");
+        EmptyText.Text = message;
+        EmptyText.Visibility = message.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => UpdateFilter();
