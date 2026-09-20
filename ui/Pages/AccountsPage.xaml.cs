@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
@@ -10,6 +11,8 @@ namespace CloudReEdit.Pages;
 
 public partial class AccountsPage : Page
 {
+    private bool _isRefreshing;
+
     public AccountsPage()
     {
         InitializeComponent();
@@ -19,28 +22,97 @@ public partial class AccountsPage : Page
 
     private async Task RefreshAsync()
     {
-        var accounts = await Task.Run(AccountScanner.ListAccounts);
-
-        AccountCombo.ItemsSource = accounts;
-
-        var steamPath = SteamDetector.FindSteamPath();
-        SteamPathText.Text = steamPath ?? "Steam not found.";
-
-        UpdateProviderStatus();
-        UpdateSteamStatus();
-
-        // Preselect the previously chosen account.
-        if (!string.IsNullOrEmpty(AppState.AccountId))
+        if (_isRefreshing) return;
+        _isRefreshing = true;
+        SetRefreshing(true);
+        try
         {
-            foreach (var item in AccountCombo.Items)
+            List<AccountInfo> accounts;
+            try
             {
-                if (item is AccountInfo info && info.AccountId == AppState.AccountId)
+                accounts = await Task.Run(AccountScanner.ListAccounts);
+            }
+            catch
+            {
+                // Enumeration failed: nothing usable to show, keep the page alive.
+                AccountCombo.ItemsSource = null;
+                AccountCombo.SelectedItem = null;
+                OpenGamesButton.IsEnabled = false;
+                ShowState(AccountsListState.LoadErrorState());
+                return;
+            }
+
+            AccountCombo.ItemsSource = accounts;
+
+            var steamPath = SteamDetector.FindSteamPath();
+            SteamPathText.Text = steamPath ?? "Steam not found.";
+
+            UpdateProviderStatus();
+            UpdateSteamStatus();
+
+            // Preselect the previously chosen account when it still exists.
+            AccountCombo.SelectedItem = null;
+            if (!string.IsNullOrEmpty(AppState.AccountId))
+            {
+                foreach (var item in AccountCombo.Items)
                 {
-                    AccountCombo.SelectedItem = item;
-                    break;
+                    if (item is AccountInfo info && info.AccountId == AppState.AccountId)
+                    {
+                        AccountCombo.SelectedItem = item;
+                        break;
+                    }
                 }
             }
+            OpenGamesButton.IsEnabled = AccountCombo.SelectedItem is AccountInfo;
+
+            bool steamFound = steamPath != null;
+            bool configExists = File.Exists(SteamDetector.GetConfigFilePath());
+            bool configUsable = SteamDetector.ReadConfig() != null;
+            ShowState(AccountsListState.Determine(steamFound, configExists, configUsable, accounts.Count));
         }
+        catch
+        {
+            AccountCombo.ItemsSource = null;
+            AccountCombo.SelectedItem = null;
+            OpenGamesButton.IsEnabled = false;
+            ShowState(AccountsListState.LoadErrorState());
+        }
+        finally
+        {
+            _isRefreshing = false;
+            SetRefreshing(false);
+        }
+    }
+
+    private void ShowState((AccountsListStateKind State, string Message) state)
+    {
+        if (state.State == AccountsListStateKind.AccountsAvailable)
+        {
+            StateBar.IsOpen = false;
+            return;
+        }
+
+        (StateBar.Title, StateBar.Severity) = state.State switch
+        {
+            AccountsListStateKind.SteamNotFound =>
+                ("Steam not detected", Wpf.Ui.Controls.InfoBarSeverity.Warning),
+            AccountsListStateKind.CloudRedirectNotConfigured =>
+                ("CloudRedirect not configured", Wpf.Ui.Controls.InfoBarSeverity.Warning),
+            AccountsListStateKind.ConfigUnusable =>
+                ("CloudRedirect config problem", Wpf.Ui.Controls.InfoBarSeverity.Warning),
+            AccountsListStateKind.NoAccounts =>
+                ("No accounts yet", Wpf.Ui.Controls.InfoBarSeverity.Informational),
+            _ =>
+                ("Couldn't load accounts", Wpf.Ui.Controls.InfoBarSeverity.Error),
+        };
+        StateBar.Message = state.Message;
+        StateBar.IsOpen = true;
+    }
+
+    private void SetRefreshing(bool refreshing)
+    {
+        RefreshButton.IsEnabled = !refreshing;
+        LoadingPanel.Visibility = refreshing ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void UpdateProviderStatus()

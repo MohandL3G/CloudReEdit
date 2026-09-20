@@ -18,6 +18,7 @@
          instead of referencing the WPF assembly. -->
     <Compile Include="../../ui/Services/PlaytimeModel.cs" Link="Source/PlaytimeModel.cs" />
     <Compile Include="../../ui/Services/EditorSnapshot.cs" Link="Source/EditorSnapshot.cs" />
+    <Compile Include="../../ui/Services/AccountsListState.cs" Link="Source/AccountsListState.cs" />
     <Compile Include="../../ui/Services/GameListEmptyState.cs" Link="Source/GameListEmptyState.cs" />
     <Compile Include="../../ui/Services/GameNames.cs" Link="Source/GameNames.cs" />
     <Compile Include="../../ui/Services/ProviderStatus.cs" Link="Source/ProviderStatus.cs" />

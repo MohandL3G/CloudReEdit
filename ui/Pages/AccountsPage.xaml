@@ -13,6 +13,27 @@
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                        TextWrapping="Wrap" Margin="0,0,0,16" />
 
+            <StackPanel x:Name="LoadingPanel"
+                        Orientation="Horizontal"
+                        Visibility="Collapsed"
+                        Margin="0,0,0,8">
+                <ui:ProgressRing IsIndeterminate="True"
+                                 Width="16" Height="16"
+                                 VerticalAlignment="Center" />
+                <TextBlock Text="Scanning…"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           VerticalAlignment="Center"
+                           Margin="8,0,0,0" />
+            </StackPanel>
+
+            <ui:InfoBar x:Name="StateBar"
+                        Title=""
+                        Message=""
+                        Severity="Informational"
+                        IsClosable="True"
+                        IsOpen="False"
+                        Margin="0,0,0,12" />
+
             <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1" CornerRadius="8" Padding="20">
@@ -39,7 +60,7 @@
                                   MinWidth="320"
                                   DisplayMemberPath="DisplayName"
                                   SelectionChanged="AccountCombo_SelectionChanged" />
-                        <ui:Button Content="Refresh" Margin="8,0,0,0"
+                        <ui:Button x:Name="RefreshButton" Content="Refresh" Margin="8,0,0,0"
                                    Click="Refresh_Click" />
                     </StackPanel>
 
