@@ -307,4 +307,111 @@ public class PlaytimeModelTests
 
         Assert.Equal(0, m.CalculateCloudRedirectTwoWeekTotal(Now));
     }
+
+    // ---------------- Clone / snapshot ----------------
+
+    [Fact]
+    public void Clone_DeepCopy_MutatingOriginal_LeavesSnapshotUntouched()
+    {
+        var m = new PlaytimeModel();
+        var pc = new DevicePlaytime { Name = "DESKTOP-PC", Windows = 500, Mac = 10, Linux = 5 };
+        pc.Days[20340] = 60;
+        pc.Days[20341] = 90;
+        m.PerDevice.Add(pc);
+        m.LastPlayed = 12345;
+        m.Minutes2Weeks = 150;
+
+        var snap = m.Clone();
+
+        Assert.Equal(515, snap.Total);
+        Assert.Equal(12345, snap.LastPlayed);
+        Assert.Equal(150, snap.Minutes2Weeks);
+        var s = snap.PerDevice[0];
+        Assert.Equal("DESKTOP-PC", s.Name);
+        Assert.Equal(500, s.Windows);
+        Assert.Equal(10, s.Mac);
+        Assert.Equal(5, s.Linux);
+        Assert.Equal(2, s.Days.Count);
+        Assert.Equal(60, s.Days[20340]);
+        Assert.Equal(90, s.Days[20341]);
+
+        pc.Name = "OTHER";
+        pc.Windows = 1;
+        pc.Linux = 0;
+        pc.Days[20340] = 7;
+        pc.Days.Add(999, 42);
+        m.LastPlayed = 999;
+        m.Minutes2Weeks = 0;
+
+        Assert.Equal("DESKTOP-PC", s.Name);
+        Assert.Equal(500, s.Windows);
+        Assert.Equal(515, snap.Total);
+        Assert.Equal(12345, snap.LastPlayed);
+        Assert.Equal(150, snap.Minutes2Weeks);
+        Assert.Equal(60, s.Days[20340]);
+        Assert.Equal(90, s.Days[20341]);
+        Assert.Equal(2, s.Days.Count);
+        Assert.False(s.Days.ContainsKey(999));
+    }
+
+    [Fact]
+    public void Clone_DeepCopy_MutatingSnapshot_LeavesOriginalUntouched()
+    {
+        var m = new PlaytimeModel();
+        var pc = new DevicePlaytime { Name = "DESKTOP-PC", Windows = 100 };
+        pc.Days[20340] = 60;
+        m.PerDevice.Add(pc);
+        m.LastPlayed = 42;
+
+        var snap = m.Clone();
+
+        snap.PerDevice[0].Windows = 0;
+        snap.PerDevice[0].Name = "MUTATED";
+        snap.PerDevice[0].Days[20340] = 0;
+        snap.PerDevice[0].Days.Clear();
+        snap.LastPlayed = 0;
+
+        Assert.Equal(100, pc.Windows);
+        Assert.Equal("DESKTOP-PC", pc.Name);
+        Assert.Equal(42, m.LastPlayed);
+        Assert.Single(pc.Days);
+        Assert.Equal(60, pc.Days[20340]);
+    }
+
+    [Fact]
+    public void Clone_PreservesDayHistoryVerbatim()
+    {
+        var m = new PlaytimeModel();
+        var pc = new DevicePlaytime { Name = "DESKTOP-PC", Windows = 500 };
+        pc.Days[20340] = 60;
+        pc.Days[20341] = 90;
+        m.PerDevice.Add(pc);
+
+        var snap = m.Clone();
+
+        Assert.Equal(2, snap.PerDevice[0].Days.Count);
+        Assert.Equal(60, snap.PerDevice[0].Days[20340]);
+        Assert.Equal(90, snap.PerDevice[0].Days[20341]);
+        Assert.True(snap.HasDayTracking);
+    }
+
+    [Fact]
+    public void Clone_PreservesDayTrackingPresence_EvenWhenDaysEmpty()
+    {
+        var json = """
+            {
+                "per_device": {
+                    "DESKTOP-PC": { "windows": 500, "mac": 0, "linux": 0, "days": {} }
+                }
+            }
+            """;
+        var m = PlaytimeModel.Parse(JsonNode.Parse(json) as JsonObject);
+        Assert.True(m.HasDayTracking);
+        Assert.Empty(m.PerDevice[0].Days);
+
+        var snap = m.Clone();
+
+        Assert.True(snap.HasDayTracking);
+        Assert.Empty(snap.PerDevice[0].Days);
+    }
 }

@@ -361,6 +361,36 @@ public class SaveTransactionTests
         Assert.Equal(CopyState.Verified, copyStates[CopyTarget.Vdf]);
     }
 
+    [Fact]
+    public async Task Save_UsesFrozenSnapshot_NotLaterMutationsOfLiveModel()
+    {
+        var live = new PlaytimeModel();
+        var pc = new DevicePlaytime { Name = "pc", Windows = 100 };
+        pc.Days[20340] = 60;
+        live.PerDevice.Add(pc);
+
+        var snapshot = live.Clone();
+
+        // The editor model keeps changing after Save is clicked; the transaction
+        // must have been handed the frozen snapshot and ignore the live model.
+        live.PerDevice[0].Windows = 900;
+        live.PerDevice[0].Name = "OTHER-PC";
+        live.PerDevice[0].Days[20340] = 1;
+        live.PerDevice.Add(new DevicePlaytime { Name = "extraneous", Windows = 50 });
+
+        using var env = Setup(out var scope, out var paths, out var fake, out _, out _);
+        scope.Source = snapshot;
+
+        var report = await Run(scope, paths, fake, total: 100, steamRunning: false);
+
+        Assert.Equal(SaveOutcome.SavedVerified, report.Outcome);
+        var written = ReadLocalModel(paths.LocalStatsPath);
+        Assert.Equal(100, written.Total);
+        Assert.Single(written.PerDevice);
+        Assert.Equal("pc", written.PerDevice[0].Name);
+        Assert.Equal(60, written.PerDevice[0].Days[20340]);
+    }
+
     // ---------------- helpers ----------------
 
     private static async Task<SaveReport> Run(SaveScope scope, SavePaths paths,

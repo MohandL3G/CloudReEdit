@@ -14,7 +14,7 @@
                 <TextBlock Text="Playtime Editor"
                            FontSize="28" FontWeight="SemiBold"
                            Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
-                <ui:Button Grid.Column="1" VerticalAlignment="Center"
+                <ui:Button x:Name="BackButton" Grid.Column="1" VerticalAlignment="Center"
                            Appearance="Secondary"
                            Content="Back to Games"
                            Click="Back_Click" />
@@ -113,10 +113,10 @@
                         <ui:TextBox x:Name="NewDeviceBox"
                                     PlaceholderText="Device name"
                                     Width="220" />
-                        <ui:Button Content="Add device"
+                        <ui:Button x:Name="AddDeviceButton" Content="Add device"
                                    Margin="8,0,0,0"
                                    Click="AddDevice_Click" />
-                        <ui:Button Content="Remove selected"
+                        <ui:Button x:Name="RemoveDeviceButton" Content="Remove selected"
                                    Appearance="Secondary"
                                    Margin="8,0,0,0"
                                    Click="RemoveDevice_Click" />
@@ -136,7 +136,7 @@
                     <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                         <ui:CalendarDatePicker x:Name="LastPlayedPicker"
                                                Width="180" />
-                        <ui:Button Content="Now"
+                        <ui:Button x:Name="NowButton" Content="Now"
                                    Margin="8,0,0,0"
                                    Appearance="Secondary"
                                    Click="Now_Click" />
@@ -154,11 +154,22 @@
 
             <StackPanel Orientation="Horizontal">
                 <ui:Button x:Name="SaveButton"
-                           Content="Save playtime"
                            Appearance="Success"
-                           Icon="{ui:SymbolIcon Save24}"
-                           Click="Save_Click" />
-                <ui:Button Content="Reload"
+                           Click="Save_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:ProgressRing x:Name="SavingRing"
+                                         IsIndeterminate="True"
+                                         Width="16"
+                                         Height="16"
+                                         VerticalAlignment="Center"
+                                         Visibility="Collapsed" />
+                        <TextBlock x:Name="SaveButtonText"
+                                   Text="Save playtime"
+                                   VerticalAlignment="Center"
+                                   Margin="8,0,0,0" />
+                    </StackPanel>
+                </ui:Button>
+                <ui:Button x:Name="ReloadButton" Content="Reload"
                            Margin="8,0,0,0"
                            Appearance="Secondary"
                            Click="Reload_Click" />

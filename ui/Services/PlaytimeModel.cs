@@ -221,6 +221,34 @@ public sealed class PlaytimeModel
         return true;
     }
 
+    /// <summary>Deep copy of the whole model, including the verbatim per-device
+    /// day buckets and day-tracking presence. Used to freeze the editor state at
+    /// the moment Save is clicked so the save transaction can never see edits
+    /// made afterwards.</summary>
+    public PlaytimeModel Clone()
+    {
+        var m = new PlaytimeModel
+        {
+            Minutes2Weeks = Minutes2Weeks,
+            LastPlayed = LastPlayed,
+        };
+        foreach (var d in PerDevice)
+        {
+            var nd = new DevicePlaytime
+            {
+                Name = d.Name,
+                Windows = d.Windows,
+                Mac = d.Mac,
+                Linux = d.Linux,
+            };
+            nd._daysPropertyPresent = d._daysPropertyPresent;
+            foreach (var (day, minutes) in d.Days)
+                nd.Days[day] = minutes;
+            m.PerDevice.Add(nd);
+        }
+        return m;
+    }
+
     private static long GetLong(JsonNode? node)
     {
         if (node == null) return 0;

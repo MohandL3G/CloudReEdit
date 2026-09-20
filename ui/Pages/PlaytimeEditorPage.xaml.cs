@@ -15,6 +15,7 @@ public partial class PlaytimeEditorPage : Page
     private ICloudProvider? _provider;
     private bool _useHours;
     private bool _syncingTotal;
+    private bool _isSaving;
     private DateTime _existingLocal = DateTime.Now;
 
     public PlaytimeEditorPage()
@@ -135,6 +136,7 @@ public partial class PlaytimeEditorPage : Page
 
     private void HoursSwitch_Changed(object sender, RoutedEventArgs e)
     {
+        if (_isSaving) return;
         _useHours = HoursSwitch.IsChecked == true;
         UnitText.Text = _useHours ? "hours" : "minutes";
         RefreshTotals();
@@ -142,13 +144,14 @@ public partial class PlaytimeEditorPage : Page
 
     private void DevicesGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
     {
+        if (_isSaving) return;
         if (e.EditAction == DataGridEditAction.Commit)
             RefreshTotals();
     }
 
     private void AddDevice_Click(object sender, RoutedEventArgs e)
     {
-        if (_ctx == null) return;
+        if (_ctx == null || _isSaving) return;
         var name = NewDeviceBox.Text?.Trim() ?? "";
         if (string.IsNullOrEmpty(name))
         {
@@ -175,13 +178,14 @@ public partial class PlaytimeEditorPage : Page
 
     private void RemoveDevice_Click(object sender, RoutedEventArgs e)
     {
-        if (_ctx == null || DevicesGrid.SelectedItem is not DevicePlaytime device) return;
+        if (_ctx == null || _isSaving || DevicesGrid.SelectedItem is not DevicePlaytime device) return;
         _ctx.Local.PerDevice.Remove(device);
         RefreshTotals();
     }
 
     private void Now_Click(object sender, RoutedEventArgs e)
     {
+        if (_isSaving) return;
         LastPlayedPicker.Date = DateTime.Now;
     }
 
@@ -194,7 +198,7 @@ public partial class PlaytimeEditorPage : Page
 
     private async void Save_Click(object sender, RoutedEventArgs e)
     {
-        if (_ctx == null) return;
+        if (_ctx == null || _isSaving) return;
 
         if (SteamDetector.IsSteamRunning())
         {
@@ -205,21 +209,65 @@ public partial class PlaytimeEditorPage : Page
             return;
         }
 
+        // Lock the screen while saving. The captured snapshot is the exact state
+        // the user sees right now: any pending grid cell edit is committed first
+        // so the device cells, the total and the snapshot all agree.
+        CommitPendingCellEdit();
         long total = ParseTotalMinutes();
         long lastPlayed = GetLastPlayedUnix();
+        var snapshot = _ctx.Local.Clone();
 
-        SaveButton.IsEnabled = false;
+        SetSavingState(true);
         try
         {
-            var report = await PlaytimeService.SaveAsync(_ctx, total, lastPlayed);
+            var report = await PlaytimeService.SaveAsync(_ctx, snapshot, total, lastPlayed);
             if (report.Outcome is SaveOutcome.SavedVerified or SaveOutcome.SavedUnverified)
                 await LoadAsync();
             ApplyReport(report, total);
         }
+        catch (Exception ex)
+        {
+            ResultBar.Severity = Wpf.Ui.Controls.InfoBarSeverity.Error;
+            ResultBar.Title = "Save failed";
+            ResultBar.Message = $"An unexpected error occurred while saving. Your edits remain on screen.\n{ex.Message}";
+            ResultBar.IsOpen = true;
+        }
         finally
         {
-            SaveButton.IsEnabled = true;
+            SetSavingState(false);
         }
+    }
+
+    // Commits the value being typed into a data-grid cell so the model, the
+    // on-screen total and the save snapshot all reflect what the user sees.
+    private void CommitPendingCellEdit()
+    {
+        DevicesGrid.CommitEdit(DataGridEditingUnit.Cell, true);
+        DevicesGrid.CommitEdit(DataGridEditingUnit.Row, true);
+    }
+
+    private void SetSavingState(bool saving)
+    {
+        _isSaving = saving;
+        SaveButtonText.Text = saving ? "Saving…" : "Save playtime";
+        SavingRing.IsIndeterminate = saving;
+        SavingRing.Visibility = saving ? Visibility.Visible : Visibility.Collapsed;
+        SetEditorEnabled(!saving);
+    }
+
+    private void SetEditorEnabled(bool enabled)
+    {
+        TotalBox.IsEnabled = enabled;
+        HoursSwitch.IsEnabled = enabled;
+        DevicesGrid.IsEnabled = enabled;
+        NewDeviceBox.IsEnabled = enabled;
+        AddDeviceButton.IsEnabled = enabled;
+        RemoveDeviceButton.IsEnabled = enabled;
+        LastPlayedPicker.IsEnabled = enabled;
+        NowButton.IsEnabled = enabled;
+        ReloadButton.IsEnabled = enabled;
+        BackButton.IsEnabled = enabled;
+        SaveButton.IsEnabled = enabled;
     }
 
     private void ApplyReport(SaveReport report, long total)
@@ -310,10 +358,14 @@ public partial class PlaytimeEditorPage : Page
     }
 
     private async void Reload_Click(object sender, RoutedEventArgs e)
-        => await LoadAsync();
+    {
+        if (_isSaving) return;
+        await LoadAsync();
+    }
 
     private void Back_Click(object sender, RoutedEventArgs e)
     {
+        if (_isSaving) return;
         if (Window.GetWindow(this) is MainWindow win)
             win.Navigate(typeof(GamesPage));
     }

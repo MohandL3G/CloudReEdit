@@ -97,9 +97,12 @@ public static class PlaytimeService
 
     /// <summary>Runs the full multi-copy save protocol for
     /// <paramref name="targetTotal"/> minutes at the given last-played timestamp.
-    /// The cloud provider is created here (during pre-flight) so a bad or missing
-    /// provider aborts before any file is touched.</summary>
+    /// <paramref name="source"/> is the frozen snapshot the user saw when clicking
+    /// Save — the transaction must never read the live editor model. The cloud
+    /// provider is created here (during pre-flight) so a bad or missing provider
+    /// aborts before any file is touched.</summary>
     public static async Task<SaveReport> SaveAsync(EditorContext ctx,
+        PlaytimeModel source,
         long targetTotal, long lastPlayed)
     {
         bool steamRunning = SteamDetector.IsSteamRunning();
@@ -131,7 +134,7 @@ public static class PlaytimeService
         {
             AccountId = ctx.AccountId,
             AppId = ctx.AppId,
-            Source = ctx.Local,
+            Source = source,
         }, paths,
             provider != null && provider.CanWrite ? provider : null,
             targetTotal, lastPlayed, steamRunning);
