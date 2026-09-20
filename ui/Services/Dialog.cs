@@ -90,4 +90,21 @@ public static class Dialog
         };
         return await box.ShowDialogAsync() == MessageBoxResult.Primary;
     }
+
+    /// <summary>Three-button choice. Primary / Secondary / Close map to
+    /// <see cref="MessageBoxResult.Primary"/> / <see cref="MessageBoxResult.Secondary"/> /
+    /// <see cref="MessageBoxResult.None"/>.</summary>
+    public static async Task<MessageBoxResult> Choice3Async(string title, string message,
+        string primaryText, string secondaryText, string closeText)
+    {
+        var box = new MessageBox
+        {
+            Title = title,
+            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+            PrimaryButtonText = primaryText,
+            SecondaryButtonText = secondaryText,
+            CloseButtonText = closeText
+        };
+        return await box.ShowDialogAsync();
+    }
 }

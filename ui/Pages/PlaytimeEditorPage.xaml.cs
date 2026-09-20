@@ -1,9 +1,11 @@
 using System;
+using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using CloudReEdit.Resources;
 using CloudReEdit.Services;
 using CloudReEdit.Services.Cloud;
 
@@ -17,75 +19,113 @@ public partial class PlaytimeEditorPage : Page
     private bool _syncingTotal;
     private bool _isSaving;
     private DateTime _existingLocal = DateTime.Now;
+    private EditorSnapshot? _baseline;
+    private bool _dirty;
+    private bool _isLoading;
+    private bool _navPromptActive;
+    private bool _bypassNav;
+    private bool _closeApproved;
+    private bool _navHookAttached;
+    private bool _closeHookAttached;
+    private bool _lastPlayedAttached;
+    private readonly DependencyPropertyDescriptor _lastPlayedChanged;
 
     public PlaytimeEditorPage()
     {
         InitializeComponent();
 
-        Loaded += async (_, _) => await LoadAsync();
-        Unloaded += (_, _) => (_provider as IDisposable)?.Dispose();
+        _lastPlayedChanged = DependencyPropertyDescriptor.FromProperty(
+            Wpf.Ui.Controls.CalendarDatePicker.DateProperty,
+            typeof(Wpf.Ui.Controls.CalendarDatePicker));
+
+        Loaded += async (_, _) =>
+        {
+            AttachHooks();
+            await LoadAsync();
+        };
+        Unloaded += (_, _) =>
+        {
+            DetachHooks();
+            (_provider as IDisposable)?.Dispose();
+        };
     }
 
     private async Task LoadAsync()
     {
-        ResultBar.IsOpen = false;
-        WarningBar.IsOpen = false;
-
-        if (string.IsNullOrEmpty(AppState.AccountId) || AppState.AppId == null)
+        _isLoading = true;
+        _dirty = false;
+        _closeApproved = false;
+        try
         {
-            GameTitleText.Text = "No game selected.";
-            GameSubText.Text = "Pick a game on the Games page first.";
-            SaveButton.IsEnabled = false;
-            return;
+            ResultBar.IsOpen = false;
+            WarningBar.IsOpen = false;
+
+            if (string.IsNullOrEmpty(AppState.AccountId) || AppState.AppId == null)
+            {
+                GameTitleText.Text = "No game selected.";
+                GameSubText.Text = "Pick a game on the Games page first.";
+                SaveButton.IsEnabled = false;
+                return;
+            }
+
+            var accountId = AppState.AccountId;
+            var appId = AppState.AppId.Value;
+
+            _ctx = await PlaytimeService.LoadAsync(accountId, appId);
+            (_provider as IDisposable)?.Dispose();
+            _provider = BuildProvider();
+
+            GameTitleText.Text = AppState.GameName ?? $"App {appId}";
+            GameSubText.Text = $"Account {accountId} - App {appId}";
+
+            // Cloud status
+            string cloudInfo;
+            if (_ctx.CloudProviderName != null)
+            {
+                cloudInfo = _provider != null && _provider.CanWrite
+                    ? $"Cloud: {_ctx.CloudProviderName} (writes supported)"
+                    : $"Cloud: {_ctx.CloudProviderName} (read-only in CloudReEdit)";
+            }
+            else
+            {
+                cloudInfo = "No CloudRedirect provider configured - saving local + VDF copies only.";
+            }
+            _ctx.Warnings.Add(cloudInfo);
+            if (!string.IsNullOrEmpty(_ctx.CloudError))
+                _ctx.Warnings.Add($"Cloud error: {_ctx.CloudError}");
+
+            if (_ctx.Warnings.Count > 0)
+            {
+                WarningBar.Title = "Information";
+                WarningBar.Message = string.Join(Environment.NewLine, _ctx.Warnings);
+                WarningBar.IsOpen = true;
+            }
+
+            // Total + devices
+            DevicesGrid.ItemsSource = _ctx.Local.PerDevice;
+            _syncingTotal = true;
+            TotalBox.Text = _ctx.Local.Total.ToString();
+            _syncingTotal = false;
+            RefreshTotals();
+
+            // Last played
+            _existingLocal = _ctx.Local.LastPlayed > 0
+                ? DateTimeOffset.FromUnixTimeSeconds(_ctx.Local.LastPlayed).LocalDateTime
+                : DateTime.Now;
+            LastPlayedPicker.Date = _existingLocal.Date;
+
+            SaveButton.IsEnabled = true;
+
+            // Baseline for unsaved-changes tracking: exactly the values a save
+            // would write for the untouched editor, so the page starts clean and
+            // only becomes dirty when the user actually changes something.
+            _baseline = new EditorSnapshot(_ctx.Local, ParseTotalMinutes(), GetLastPlayedUnix());
+            _dirty = false;
         }
-
-        var accountId = AppState.AccountId;
-        var appId = AppState.AppId.Value;
-
-        _ctx = await PlaytimeService.LoadAsync(accountId, appId);
-        (_provider as IDisposable)?.Dispose();
-        _provider = BuildProvider();
-
-        GameTitleText.Text = AppState.GameName ?? $"App {appId}";
-        GameSubText.Text = $"Account {accountId} - App {appId}";
-
-        // Cloud status
-        string cloudInfo;
-        if (_ctx.CloudProviderName != null)
+        finally
         {
-            cloudInfo = _provider != null && _provider.CanWrite
-                ? $"Cloud: {_ctx.CloudProviderName} (writes supported)"
-                : $"Cloud: {_ctx.CloudProviderName} (read-only in CloudReEdit)";
+            _isLoading = false;
         }
-        else
-        {
-            cloudInfo = "No CloudRedirect provider configured - saving local + VDF copies only.";
-        }
-        _ctx.Warnings.Add(cloudInfo);
-        if (!string.IsNullOrEmpty(_ctx.CloudError))
-            _ctx.Warnings.Add($"Cloud error: {_ctx.CloudError}");
-
-        if (_ctx.Warnings.Count > 0)
-        {
-            WarningBar.Title = "Information";
-            WarningBar.Message = string.Join(Environment.NewLine, _ctx.Warnings);
-            WarningBar.IsOpen = true;
-        }
-
-        // Total + devices
-        DevicesGrid.ItemsSource = _ctx.Local.PerDevice;
-        _syncingTotal = true;
-        TotalBox.Text = _ctx.Local.Total.ToString();
-        _syncingTotal = false;
-        RefreshTotals();
-
-        // Last played
-        _existingLocal = _ctx.Local.LastPlayed > 0
-            ? DateTimeOffset.FromUnixTimeSeconds(_ctx.Local.LastPlayed).LocalDateTime
-            : DateTime.Now;
-        LastPlayedPicker.Date = _existingLocal.Date;
-
-        SaveButton.IsEnabled = true;
     }
 
     private ICloudProvider? BuildProvider()
@@ -132,6 +172,7 @@ public partial class PlaytimeEditorPage : Page
         long total = ParseTotalMinutes();
         DeviceSumText.Text =
             $"Sum of devices: {_ctx.Local.Total} min - target {total} min (balance {(total - _ctx.Local.Total):+#;-#;0})";
+        UpdateDirty();
     }
 
     private void HoursSwitch_Changed(object sender, RoutedEventArgs e)
@@ -140,6 +181,7 @@ public partial class PlaytimeEditorPage : Page
         _useHours = HoursSwitch.IsChecked == true;
         UnitText.Text = _useHours ? "hours" : "minutes";
         RefreshTotals();
+        UpdateDirty();
     }
 
     private void DevicesGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
@@ -147,6 +189,7 @@ public partial class PlaytimeEditorPage : Page
         if (_isSaving) return;
         if (e.EditAction == DataGridEditAction.Commit)
             RefreshTotals();
+        UpdateDirty();
     }
 
     private void AddDevice_Click(object sender, RoutedEventArgs e)
@@ -174,6 +217,7 @@ public partial class PlaytimeEditorPage : Page
         _ctx.Local.PerDevice.Add(new DevicePlaytime { Name = name });
         NewDeviceBox.Text = "";
         RefreshTotals();
+        UpdateDirty();
     }
 
     private void RemoveDevice_Click(object sender, RoutedEventArgs e)
@@ -181,6 +225,7 @@ public partial class PlaytimeEditorPage : Page
         if (_ctx == null || _isSaving || DevicesGrid.SelectedItem is not DevicePlaytime device) return;
         _ctx.Local.PerDevice.Remove(device);
         RefreshTotals();
+        UpdateDirty();
     }
 
     private void Now_Click(object sender, RoutedEventArgs e)
@@ -197,8 +242,11 @@ public partial class PlaytimeEditorPage : Page
     }
 
     private async void Save_Click(object sender, RoutedEventArgs e)
+        => await SaveFlowAsync();
+
+    private async Task<bool> SaveFlowAsync()
     {
-        if (_ctx == null || _isSaving) return;
+        if (_ctx == null || _isSaving) return false;
 
         if (SteamDetector.IsSteamRunning())
         {
@@ -206,7 +254,7 @@ public partial class PlaytimeEditorPage : Page
             ResultBar.Title = "Steam is running";
             ResultBar.Message = "Close Steam before editing playtime, otherwise Steam may overwrite your changes.";
             ResultBar.IsOpen = true;
-            return;
+            return false;
         }
 
         // Lock the screen while saving. The captured snapshot is the exact state
@@ -221,9 +269,14 @@ public partial class PlaytimeEditorPage : Page
         try
         {
             var report = await PlaytimeService.SaveAsync(_ctx, snapshot, total, lastPlayed);
-            if (report.Outcome is SaveOutcome.SavedVerified or SaveOutcome.SavedUnverified)
+            // A committed save re-loads the canonical state, which also resets the
+            // dirty baseline. A failed save never reloads and leaves the user's
+            // edits (and therefore the dirty state) in place.
+            bool committed = report.Outcome is SaveOutcome.SavedVerified or SaveOutcome.SavedUnverified;
+            if (committed)
                 await LoadAsync();
             ApplyReport(report, total);
+            return committed;
         }
         catch (Exception ex)
         {
@@ -231,6 +284,7 @@ public partial class PlaytimeEditorPage : Page
             ResultBar.Title = "Save failed";
             ResultBar.Message = $"An unexpected error occurred while saving. Your edits remain on screen.\n{ex.Message}";
             ResultBar.IsOpen = true;
+            return false;
         }
         finally
         {
@@ -360,7 +414,22 @@ public partial class PlaytimeEditorPage : Page
     private async void Reload_Click(object sender, RoutedEventArgs e)
     {
         if (_isSaving) return;
-        await LoadAsync();
+
+        if (!HasUnsavedChanges)
+        {
+            await LoadAsync();
+            return;
+        }
+
+        switch (await AskUnsavedAsync())
+        {
+            case UnsavedChoice.Save:
+                await SaveFlowAsync();
+                break;
+            case UnsavedChoice.Discard:
+                await LoadAsync();
+                break;
+        }
     }
 
     private void Back_Click(object sender, RoutedEventArgs e)
@@ -368,5 +437,167 @@ public partial class PlaytimeEditorPage : Page
         if (_isSaving) return;
         if (Window.GetWindow(this) is MainWindow win)
             win.Navigate(typeof(GamesPage));
+    }
+
+    public bool HasUnsavedChanges => _dirty;
+
+    private void UpdateDirty()
+    {
+        if (_syncingTotal || _isLoading || _ctx == null || _baseline == null)
+            return;
+        _dirty = _baseline.DiffersFrom(_ctx.Local, ParseTotalMinutes(), GetLastPlayedUnix());
+    }
+
+    private void LastPlayed_Changed(object? sender, EventArgs e)
+    {
+        if (_isSaving) return;
+        UpdateDirty();
+    }
+
+    private enum UnsavedChoice { Save, Discard, Cancel }
+
+    private async Task<UnsavedChoice> AskUnsavedAsync()
+    {
+        var result = await Dialog.Choice3Async(
+            "Unsaved changes",
+            "You have unsaved playtime changes. What would you like to do?",
+            S.Get("Dialog_Save"),
+            S.Get("Dialog_Discard"),
+            S.Get("Dialog_Cancel"));
+        return result switch
+        {
+            Wpf.Ui.Controls.MessageBoxResult.Primary => UnsavedChoice.Save,
+            Wpf.Ui.Controls.MessageBoxResult.Secondary => UnsavedChoice.Discard,
+            _ => UnsavedChoice.Cancel,
+        };
+    }
+
+    private void AttachHooks()
+    {
+        if (Window.GetWindow(this) is not MainWindow win) return;
+        if (!_lastPlayedAttached)
+        {
+            _lastPlayedChanged.AddValueChanged(LastPlayedPicker, LastPlayed_Changed);
+            _lastPlayedAttached = true;
+        }
+        if (!_navHookAttached)
+        {
+            win.RootNavigation.Navigating += RootNavigation_Navigating;
+            _navHookAttached = true;
+        }
+        if (!_closeHookAttached)
+        {
+            win.Closing += MainWindow_Closing;
+            _closeHookAttached = true;
+        }
+    }
+
+    private void DetachHooks()
+    {
+        if (Window.GetWindow(this) is MainWindow win)
+        {
+            if (_navHookAttached)
+            {
+                win.RootNavigation.Navigating -= RootNavigation_Navigating;
+                _navHookAttached = false;
+            }
+            if (_closeHookAttached)
+            {
+                win.Closing -= MainWindow_Closing;
+                _closeHookAttached = false;
+            }
+        }
+        if (_lastPlayedAttached)
+        {
+            _lastPlayedChanged.RemoveValueChanged(LastPlayedPicker, LastPlayed_Changed);
+            _lastPlayedAttached = false;
+        }
+    }
+
+    private async void RootNavigation_Navigating(
+        Wpf.Ui.Controls.NavigationView sender, Wpf.Ui.Controls.NavigatingCancelEventArgs e)
+    {
+        if (_bypassNav || _ctx == null || _isLoading || _baseline == null) return;
+        if (e.Page is PlaytimeEditorPage) return;
+        if (_isSaving || _navPromptActive)
+        {
+            e.Cancel = true;
+            return;
+        }
+        if (!HasUnsavedChanges) return;
+
+        e.Cancel = true;
+        var target = e.Page.GetType();
+        _navPromptActive = true;
+        try
+        {
+            switch (await AskUnsavedAsync())
+            {
+                case UnsavedChoice.Save when await SaveFlowAsync():
+                    NavigateAway(sender, target);
+                    break;
+                case UnsavedChoice.Save:
+                    break;
+                case UnsavedChoice.Discard:
+                    NavigateAway(sender, target);
+                    break;
+            }
+        }
+        finally
+        {
+            _navPromptActive = false;
+        }
+    }
+
+    private void NavigateAway(Wpf.Ui.Controls.NavigationView sender, Type target)
+    {
+        _bypassNav = true;
+        try
+        {
+            sender.Navigate(target);
+        }
+        finally
+        {
+            _bypassNav = false;
+        }
+    }
+
+    private async void MainWindow_Closing(object? sender, CancelEventArgs e)
+    {
+        if (_closeApproved) return;
+        if (_ctx == null || _isLoading || _baseline == null) return;
+        if (_navPromptActive)
+        {
+            e.Cancel = true;
+            return;
+        }
+        if (_isSaving)
+        {
+            e.Cancel = true;
+            await Dialog.ShowInfoAsync("Save in progress",
+                "Please wait for the save to finish before closing.");
+            return;
+        }
+        if (!HasUnsavedChanges) return;
+
+        e.Cancel = true;
+        switch (await AskUnsavedAsync())
+        {
+            case UnsavedChoice.Save when await SaveFlowAsync():
+                RequestClose(sender);
+                break;
+            case UnsavedChoice.Save:
+                break;
+            case UnsavedChoice.Discard:
+                RequestClose(sender);
+                break;
+        }
+    }
+
+    private void RequestClose(object? sender)
+    {
+        if (sender is not Window win) return;
+        _closeApproved = true;
+        win.Close();
     }
 }
