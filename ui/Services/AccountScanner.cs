@@ -78,6 +78,7 @@ public static class AccountScanner
             {
                 AccountId = accountId,
                 AppId = appId,
+                Name = GameNames.InitialName(appId),
             };
 
             try

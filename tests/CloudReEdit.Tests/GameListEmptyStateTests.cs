@@ -48,4 +48,19 @@ public class GameListEmptyStateTests
         var msg = GameListEmptyState.For(true, totalGames: 3, shownGames: 0, query: "   ");
         Assert.Equal("", msg);
     }
+
+    [Fact]
+    public void EnrichmentRefresh_RecomputesFromVisibleCount()
+    {
+        // A store-name search matches nothing while titles are AppId fallbacks, so
+        // the banner says "no matches"; once enrichment replaces the names the same
+        // query matches and the banner must clear. The decision is driven purely by
+        // the FILTERED (visible) count, never by a cached message, so a re-call with
+        // the refreshed count always clears the stale text.
+        var before = GameListEmptyState.For(true, totalGames: 10, shownGames: 0, query: "team");
+        Assert.Equal(GameListEmptyState.NoSearchMatches, before);
+
+        var after = GameListEmptyState.For(true, totalGames: 10, shownGames: 1, query: "team");
+        Assert.Equal("", after);
+    }
 }

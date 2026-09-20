@@ -19,6 +19,7 @@
     <Compile Include="../../ui/Services/PlaytimeModel.cs" Link="Source/PlaytimeModel.cs" />
     <Compile Include="../../ui/Services/EditorSnapshot.cs" Link="Source/EditorSnapshot.cs" />
     <Compile Include="../../ui/Services/GameListEmptyState.cs" Link="Source/GameListEmptyState.cs" />
+    <Compile Include="../../ui/Services/GameNames.cs" Link="Source/GameNames.cs" />
     <Compile Include="../../ui/Services/VdfEditor.cs" Link="Source/VdfEditor.cs" />
     <Compile Include="../../ui/Services/FileUtils.cs" Link="Source/FileUtils.cs" />
     <Compile Include="../../ui/Services/SaveReportModel.cs" Link="Source/SaveReportModel.cs" />

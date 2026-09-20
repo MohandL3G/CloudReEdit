@@ -69,9 +69,8 @@ public partial class GamesPage : Page
 
         foreach (var game in _games)
         {
-            game.Name = info.TryGetValue(game.AppId, out var app) && !string.IsNullOrEmpty(app.Name)
-                ? app.Name
-                : $"App {game.AppId}";
+            game.Name = GameNames.DisplayName(game.AppId,
+                info.TryGetValue(game.AppId, out var app) ? app.Name : null);
         }
 
         if (_view != null)
