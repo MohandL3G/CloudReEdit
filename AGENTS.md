@@ -25,6 +25,13 @@ CloudRedirect's config and credentials are read (never modified) from
 - `ui/Services/` — app logic, ports of CloudRedirect behavior. Save pipeline lives
   in `SaveTransaction.cs` (state machine), `SaveReportModel.cs` (report types),
   and `BackupManifest.cs` (backup metadata).
+- Pure helpers (`PlaytimeModel`, `VdfEditor`, `FileUtils`, `GameNames`,
+  `GameListEmptyState`, `AccountsListState`, `ProviderStatus`, `SteamStatus`,
+  `EditorSnapshot`, ...) live under `ui/Services/` and are compile-linked into the
+  test project.
+- `SteamStoreClient` fetches game names/images from Steam's store API and caches
+  them under `%AppData%\CloudRedirect\` (`store_cache.json`, `store_images\`) —
+  the app *does* write these cache files into CloudRedirect's AppData folder.
 - `ui/Services/Cloud/` — cloud providers + `CloudProviderFactory`.
 - `tests/CloudReEdit.Tests/` — xunit project; pure-model/VDF tests compile
   `PlaytimeModel.cs`, `VdfEditor.cs`, `FileUtils.cs`, `SaveTransaction.cs`, and
@@ -41,7 +48,8 @@ CloudRedirect's config and credentials are read (never modified) from
 
 ## Conventions
 
-- NO code comments unless requested; keep code style consistent with existing files.
+- No inline code comments unless requested; XML doc comments on public types/members are
+  the repo convention — keep code style consistent with existing files.
 - WPF-UI 4.2.0 for controls; plain WPF types (e.g. `DataGridTextColumn`) are NOT in the `ui:` namespace.
 - `System.Security.Cryptography.ProtectedData` is used for DPAPI decryption of cloud credentials.
 - Don't touch the WPF-UI XAML namespace (`xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"`).
