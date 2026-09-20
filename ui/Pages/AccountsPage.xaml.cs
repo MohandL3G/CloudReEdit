@@ -26,11 +26,7 @@ public partial class AccountsPage : Page
         var steamPath = SteamDetector.FindSteamPath();
         SteamPathText.Text = steamPath ?? "Steam not found.";
 
-        var cfg = SteamDetector.ReadConfig();
-        ProviderText.Text = cfg != null
-            ? $"{cfg.DisplayName} ({cfg.Provider})"
-            : "No CloudRedirect config found in %AppData%\\CloudRedirect\\config.json";
-
+        UpdateProviderStatus();
         UpdateSteamStatus();
 
         // Preselect the previously chosen account.
@@ -47,12 +43,19 @@ public partial class AccountsPage : Page
         }
     }
 
+    private void UpdateProviderStatus()
+    {
+        var result = ProviderStatus.Classify(
+            File.Exists(SteamDetector.GetConfigFilePath()),
+            SteamDetector.ReadConfig());
+        ProviderText.Text = ProviderStatus.Text(result.State, result.DisplayName, result.Error);
+    }
+
     private void UpdateSteamStatus()
     {
-        bool running = SteamDetector.IsSteamRunning();
-        SteamRunningText.Text = running
-            ? "Steam is RUNNING. Editing playtime is blocked while Steam is open. Use \"Close Steam\" first."
-            : "Steam is not running. Playtime edits can be applied safely.";
+        bool found = SteamDetector.FindSteamPath() != null;
+        bool running = found && SteamDetector.IsSteamRunning();
+        SteamRunningText.Text = SteamStatus.Text(found, running);
         CloseSteamButton.IsEnabled = running;
     }
 

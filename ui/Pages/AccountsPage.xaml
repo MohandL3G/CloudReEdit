@@ -22,14 +22,14 @@
                                FontSize="12" />
                     <TextBlock x:Name="SteamPathText"
                                Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-                               Margin="0,0,0,12" />
+                               TextWrapping="Wrap" Margin="0,0,0,12" />
 
                     <TextBlock Text="Cloud provider"
                                Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                FontSize="12" />
                     <TextBlock x:Name="ProviderText"
                                Foreground="{DynamicResource TextFillColorPrimaryBrush}"
-                               Margin="0,0,0,12" />
+                               TextWrapping="Wrap" Margin="0,0,0,12" />
 
                     <TextBlock Text="Account"
                                Foreground="{DynamicResource TextFillColorSecondaryBrush}"
