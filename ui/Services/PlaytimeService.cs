@@ -125,9 +125,7 @@ public static class PlaytimeService
         {
             LocalStatsPath = LocalStatsStore.AppStatsPath(ctx.AccountId, ctx.AppId),
             VdfPath = LocalStatsStore.VdfPath(ctx.AccountId),
-            BackupRoot = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "CloudReEdit", "backups"),
+            BackupRoot = BackupRetention.DefaultRoot(),
         };
 
         var txn = new SaveTransaction(new SaveScope
@@ -140,11 +138,23 @@ public static class PlaytimeService
             targetTotal, lastPlayed, steamRunning);
         try
         {
-            return await txn.RunAsync().ConfigureAwait(false);
+            var report = await txn.RunAsync().ConfigureAwait(false);
+            PruneAfterSave(paths.BackupRoot, report.BackupDir);
+            return report;
         }
         finally
         {
             (provider as IDisposable)?.Dispose();
         }
+    }
+
+    /// <summary>Drops old backup directories once the save has fully finished.
+    /// Runs strictly after the transaction so retention can never influence the
+    /// outcome, and swallows every error so a pruning failure cannot change the
+    /// report the user sees.</summary>
+    private static void PruneAfterSave(string backupRoot, string? currentBackupDir)
+    {
+        try { BackupRetention.Prune(backupRoot, currentBackupDir); }
+        catch { }
     }
 }

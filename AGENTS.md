@@ -24,11 +24,12 @@ CloudRedirect's config and credentials are read (never modified) from
 - `ui/Pages/` — `AccountsPage`, `GamesPage`, `PlaytimeEditorPage`.
 - `ui/Services/` — app logic, ports of CloudRedirect behavior. Save pipeline lives
   in `SaveTransaction.cs` (state machine), `SaveReportModel.cs` (report types),
-  and `BackupManifest.cs` (backup metadata).
+  and `BackupManifest.cs` (backup metadata). `BackupRetention.cs` is the retention
+  policy for old backup directories (prune, size stats, folder-name parsing).
 - Pure helpers (`PlaytimeModel`, `VdfEditor`, `FileUtils`, `GameNames`,
   `GameListEmptyState`, `AccountsListState`, `ProviderStatus`, `SteamStatus`,
-  `EditorSnapshot`, ...) live under `ui/Services/` and are compile-linked into the
-  test project.
+  `EditorSnapshot`, `BackupRetention`, ...) live under `ui/Services/` and are
+  compile-linked into the test project.
 - `SteamStoreClient` fetches game names/images from Steam's store API and caches
   them under `%AppData%\CloudRedirect\` (`store_cache.json`, `store_images\`) —
   the app *does* write these cache files into CloudRedirect's AppData folder.
@@ -88,6 +89,15 @@ copies or skip a phase.
    `%AppData%\CloudReEdit\backups\{timestamp}_{acct}-{app}` directory. Absent
    copies are recorded as absent in the manifest, never invented. Backup failure
    aborts before any write (`BackupFailed`).
+
+   Retention is separate from the transaction: `PlaytimeService.SaveAsync` calls
+   `BackupRetention.Prune` only after `SaveTransaction.RunAsync` has returned
+   (whatever the outcome), keeping the 5 newest directories per account+game
+   (`BackupRetention.KeepPerPair`), never deleting the save's own `BackupDir`, and
+   swallowing every error — pruning must never alter a `SaveOutcome`. The same
+   sweep runs once in `App.OnStartup`. Directories whose names don't match the
+   save protocol's naming scheme are left alone, and `manifest.json` remains the
+   source of truth for a backup's contents.
 3. **Write order: VDF → local → cloud.** Each phase patches in place then verifies
    semantically read-back (`PlaytimeModel.SemanticallyEquals`; VDF re-reads
    `Playtime`/`LastPlayed`, and `Playtime2wks` only when the key exists — a VDF
@@ -119,8 +129,12 @@ copies or skip a phase.
   PUT/create failures) for deterministic classification; `S3ProviderTests` use a
   `StubHandler` `HttpMessageHandler` that snapshots the request body before the
   request is disposed. Both live in the test project.
+- `BackupRetentionTests` exercise pruning against temp directories under the system
+  temp path — never the real `%AppData%\CloudReEdit\backups`.
 - Steam must be closed before any real save test.
-- Every save backs up all three copies to `%AppData%\CloudReEdit\backups\<timestamp>\` before writing — watch for these during tests.
+- Every save backs up all three copies to `%AppData%\CloudReEdit\backups\{timestamp}_{acct}-{app}\`
+  before writing. Retention keeps only the 5 newest per account+game, but real test
+  saves still leave folders there — check the folder after manual testing.
 
 ## Releases
 
