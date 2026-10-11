@@ -63,8 +63,9 @@ public static class CloudCredentials
             var plain = ProtectedData.Unprotect(raw, null, DataProtectionScope.CurrentUser);
             return Encoding.UTF8.GetString(plain);
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Warn("cloud", $"credential decryption failed: {ex.GetType().Name}");
             return null;
         }
     }

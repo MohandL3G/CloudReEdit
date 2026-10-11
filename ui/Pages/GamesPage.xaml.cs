@@ -62,8 +62,9 @@ public partial class GamesPage : Page
         {
             info = await Services.SteamStoreClient.Shared.GetAppInfoAsync(ids);
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Exception("store", $"app info lookup failed for {ids.Count} id(s)", ex);
             info = new Dictionary<uint, Services.StoreAppInfo>();
         }
 

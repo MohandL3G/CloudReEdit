@@ -1,3 +1,4 @@
+using System;
 using System.Diagnostics;
 using System.IO;
 using CloudReEdit.Resources;
@@ -29,6 +30,7 @@ public static class SteamDetector
             if (_cachedPath != null)
                 return _cachedPath;
             _cachedPath = resolved;
+            AppLog.Info("steam", $"steam path resolved to \"{_cachedPath ?? "<not found>"}\"");
             return _cachedPath;
         }
     }
@@ -59,8 +61,9 @@ public static class SteamDetector
                 dir = dir.Parent;
             }
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Warn("steam", $"path normalization failed: {ex.GetType().Name}: {ex.Message}");
         }
 
         return null;
@@ -85,8 +88,9 @@ public static class SteamDetector
             if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
                 return path;
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Warn("steam", $"registry probe failed: {ex.GetType().Name}: {ex.Message}");
         }
 
         return null;
@@ -134,8 +138,9 @@ public static class SteamDetector
             foreach (var p in procs) p.Dispose();
             return running;
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Exception("steam", "process enumeration failed", ex);
             return false;
         }
     }
@@ -166,8 +171,9 @@ public static class SteamDetector
 
             return new CloudConfig(provider, tokenPath, syncPath);
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Exception("steam", $"config read failed: \"{configPath}\"", ex);
             return null;
         }
     }
