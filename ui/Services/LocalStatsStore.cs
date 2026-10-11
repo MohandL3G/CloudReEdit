@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -27,8 +28,9 @@ public static class LocalStatsStore
         {
             return JsonNode.Parse(File.ReadAllText(path)) as JsonObject;
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Exception("stats", $"app stats read failed: \"{path}\"", ex);
             return null;
         }
     }

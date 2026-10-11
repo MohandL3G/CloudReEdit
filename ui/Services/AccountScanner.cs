@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -91,8 +92,9 @@ public static class AccountScanner
                     entry.LastPlayed = model.LastPlayed;
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                AppLog.Debug("stats", $"app stats could not be parsed: \"{file}\" ({ex.GetType().Name})");
             }
 
             result.Add(entry);
@@ -113,8 +115,9 @@ public static class AccountScanner
             var m = PersonaRegex.Match(File.ReadAllText(vdf));
             return m.Success ? m.Groups[1].Value : "";
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Debug("stats", $"persona name read failed for account {accountId}: {ex.GetType().Name}");
             return "";
         }
     }

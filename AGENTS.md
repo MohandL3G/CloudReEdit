@@ -26,10 +26,12 @@ CloudRedirect's config and credentials are read (never modified) from
   in `SaveTransaction.cs` (state machine), `SaveReportModel.cs` (report types),
   and `BackupManifest.cs` (backup metadata). `BackupRetention.cs` is the retention
   policy for old backup directories (prune, size stats, folder-name parsing).
+  `AppLog.cs` is the rolling plain-text logger and `AppVersion.cs` reads the
+  version from the assembly (used by the pane footer label and by every log line).
 - Pure helpers (`PlaytimeModel`, `VdfEditor`, `FileUtils`, `GameNames`,
   `GameListEmptyState`, `AccountsListState`, `ProviderStatus`, `SteamStatus`,
-  `EditorSnapshot`, `BackupRetention`, ...) live under `ui/Services/` and are
-  compile-linked into the test project.
+  `EditorSnapshot`, `BackupRetention`, `AppLog`, `AppVersion`, ...) live under
+  `ui/Services/` and are compile-linked into the test project.
 - `SteamStoreClient` fetches game names/images from Steam's store API and caches
   them under `%AppData%\CloudRedirect\` (`store_cache.json`, `store_images\`) —
   the app *does* write these cache files into CloudRedirect's AppData folder.
@@ -52,6 +54,10 @@ CloudRedirect's config and credentials are read (never modified) from
 - No inline code comments unless requested; XML doc comments on public types/members are
   the repo convention — keep code style consistent with existing files.
 - WPF-UI 4.2.0 for controls; plain WPF types (e.g. `DataGridTextColumn`) are NOT in the `ui:` namespace.
+- Logging goes through `AppLog` (`ui/Services/AppLog.cs`) — never a bare `catch { }`
+  for a real failure. `AppLog` never throws and is a no-op until `App.Init` runs.
+  Never log credentials: no tokens, DPAPI output, provider config values or bucket
+  keys — paths are fine, values are not.
 - `System.Security.Cryptography.ProtectedData` is used for DPAPI decryption of cloud credentials.
 - Don't touch the WPF-UI XAML namespace (`xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"`).
 - Nullable reference types are enabled but the csproj `NoWarn` suppresses CS86xx warnings — the code freely uses `string?` and `!`.
@@ -131,6 +137,9 @@ copies or skip a phase.
   request is disposed. Both live in the test project.
 - `BackupRetentionTests` exercise pruning against temp directories under the system
   temp path — never the real `%AppData%\CloudReEdit\backups`.
+- `AppLogTests` point the logger at their own temp directories with `AppLog.InitAt`
+  and shut it down in a `finally`. `AppLog` is inert until initialized, which is what
+  keeps every other test from writing to the real `%AppData%\CloudReEdit\logs`.
 - Steam must be closed before any real save test.
 - Every save backs up all three copies to `%AppData%\CloudReEdit\backups\{timestamp}_{acct}-{app}\`
   before writing. Retention keeps only the 5 newest per account+game, but real test

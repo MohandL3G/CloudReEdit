@@ -32,8 +32,9 @@ public partial class AccountsPage : Page
             {
                 accounts = await Task.Run(AccountScanner.ListAccounts);
             }
-            catch
+            catch (Exception ex)
             {
+                AppLog.Exception("accounts", "account enumeration failed", ex);
                 // Enumeration failed: nothing usable to show, keep the page alive.
                 AccountCombo.ItemsSource = null;
                 AccountCombo.SelectedItem = null;
@@ -70,8 +71,9 @@ public partial class AccountsPage : Page
             bool configUsable = SteamDetector.ReadConfig() != null;
             ShowState(AccountsListState.Determine(steamFound, configExists, configUsable, accounts.Count));
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Exception("accounts", "accounts page refresh failed", ex);
             AccountCombo.ItemsSource = null;
             AccountCombo.SelectedItem = null;
             OpenGamesButton.IsEnabled = false;

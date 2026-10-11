@@ -96,8 +96,9 @@ internal sealed class SteamStoreClient : IDisposable
             normalizedLocal = Path.GetFullPath(uri.LocalPath);
             normalizedCache = Path.GetFullPath(ImageCacheDir);
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Debug("store", $"cached image path validation failed: {ex.GetType().Name}");
             return false;
         }
 
@@ -132,14 +133,22 @@ internal sealed class SteamStoreClient : IDisposable
         foreach (var id in appIds)
         {
             if (_mem.TryGetValue(id, out var cached) && DateTime.UtcNow - cached.FetchedUtc < DiskCacheTtl)
+            {
                 result[id] = cached;
+                AppLog.Debug("store", $"cache hit app={id}");
+            }
             else
+            {
                 toFetch.Add(id);
+                AppLog.Debug("store", $"cache miss app={id}");
+            }
         }
 
         if (toFetch.Count > 0)
         {
+            AppLog.Info("store", $"fetching {toFetch.Count} app(s) from the Steam store API");
             var fetched = await FetchFromApiAsync(toFetch).ConfigureAwait(false);
+            AppLog.Info("store", $"store API returned {fetched.Count} of {toFetch.Count} requested app(s)");
             foreach (var (id, info) in fetched)
             {
                 _mem[id] = info;
@@ -164,9 +173,11 @@ internal sealed class SteamStoreClient : IDisposable
                     FetchedUtc = info.FetchedUtc
                 };
                 result[key] = rewritten;
+                AppLog.Debug("store", $"image cache hit app={key}");
             }
             else
             {
+                AppLog.Debug("store", $"image cache miss app={key}");
                 _ = _inFlightDownloads.GetOrAdd(localPath, lp =>
                     DownloadImageToCacheAsync(info.HeaderUrl!, lp)
                         .ContinueWith(t =>
@@ -191,10 +202,17 @@ internal sealed class SteamStoreClient : IDisposable
             if (File.Exists(localPath)) return;
 
             using var resp = await _http.GetAsync(cdnUrl, HttpCompletionOption.ResponseHeadersRead);
-            if (!resp.IsSuccessStatusCode) return;
+            if (!resp.IsSuccessStatusCode)
+            {
+                AppLog.Warn("store", $"image download failed with HTTP {(int)resp.StatusCode}: {cdnUrl}");
+                return;
+            }
 
             if (resp.Content.Headers.ContentLength is long declared && declared > MaxCachedImageBytes)
+            {
+                AppLog.Warn("store", $"image too large ({declared} bytes): {cdnUrl}");
                 return;
+            }
 
             tmp = $"{localPath}.{Guid.NewGuid():N}.tmp";
 
@@ -214,25 +232,35 @@ internal sealed class SteamStoreClient : IDisposable
                 }
             }
 
-            if (written == 0) return;
+            if (written == 0)
+            {
+                AppLog.Warn("store", $"image download produced no data: {cdnUrl}");
+                return;
+            }
 
             File.Move(tmp, localPath, overwrite: true);
             tmp = null;
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Exception("store", $"image download failed: {cdnUrl}", ex);
         }
         finally
         {
             if (tmp != null)
             {
-                try { File.Delete(tmp); } catch { }
+                try { File.Delete(tmp); }
+                catch (Exception cleanupEx)
+                {
+                    AppLog.Debug("store", $"image temp cleanup failed: {cleanupEx.GetType().Name}");
+                }
             }
         }
     }
 
     private static void EvictStaleImages()
     {
+        int evicted = 0;
         try
         {
             if (!Directory.Exists(ImageCacheDir)) return;
@@ -243,9 +271,15 @@ internal sealed class SteamStoreClient : IDisposable
                 try
                 {
                     if (File.GetLastWriteTimeUtc(file) < cutoff)
+                    {
                         File.Delete(file);
+                        evicted++;
+                    }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    AppLog.Debug("store", $"image eviction failed for \"{file}\": {ex.GetType().Name}");
+                }
             }
 
             var tmpCutoff = DateTime.UtcNow - TimeSpan.FromMinutes(10);
@@ -254,12 +288,24 @@ internal sealed class SteamStoreClient : IDisposable
                 try
                 {
                     if (File.GetLastWriteTimeUtc(file) < tmpCutoff)
+                    {
                         File.Delete(file);
+                        evicted++;
+                    }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    AppLog.Debug("store", $"image temp eviction failed for \"{file}\": {ex.GetType().Name}");
+                }
             }
+
+            if (evicted > 0)
+                AppLog.Debug("store", $"evicted {evicted} stale cache file(s)");
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLog.Exception("store", "image cache sweep failed", ex);
+        }
     }
 
     private async Task<Dictionary<uint, StoreAppInfo>> FetchFromApiAsync(List<uint> appIds)
@@ -318,8 +364,9 @@ internal sealed class SteamStoreClient : IDisposable
                 result[appId] = info;
             }
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Exception("store", "store API response could not be parsed", ex);
         }
 
         return result;
@@ -349,8 +396,9 @@ internal sealed class SteamStoreClient : IDisposable
 
             _diskLoaded = true;
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Exception("store", $"store cache load failed: \"{CachePath}\"", ex);
             _diskLoaded = true;
         }
         finally
@@ -375,8 +423,9 @@ internal sealed class SteamStoreClient : IDisposable
             var json = JsonSerializer.Serialize(cache, StoreCacheJsonContext.Default.StoreCache);
             await File.WriteAllTextAsync(CachePath, json).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Exception("store", $"store cache save failed: \"{CachePath}\"", ex);
         }
     }
 

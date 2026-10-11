@@ -172,6 +172,26 @@
                            Click="OpenBackups_Click" />
             </Grid>
 
+            <Grid x:Name="LogsPanel"
+                  Visibility="Collapsed"
+                  Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="LogsText"
+                           Grid.Column="0"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                <ui:Button x:Name="OpenLogsButton"
+                           Grid.Column="1"
+                           Content="Open logs folder"
+                           Appearance="Secondary"
+                           Margin="12,0,0,0"
+                           Click="OpenLogs_Click" />
+            </Grid>
+
             <StackPanel Orientation="Horizontal">
                 <ui:Button x:Name="SaveButton"
                            Appearance="Success"

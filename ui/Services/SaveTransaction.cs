@@ -71,11 +71,16 @@ internal class SaveTransaction
 
     public async Task<SaveReport> RunAsync()
     {
+        AppLog.Info("save",
+            $"begin account={_scope.AccountId} app={_scope.AppId} requested={_requestedTotal} min " +
+            $"lastPlayed={_requestedLastPlayed} cloud={(_cloud?.GetType().Name ?? "none")}");
+
         if (!await PreFlightAsync().ConfigureAwait(false))
         {
             _report.Outcome = SaveOutcome.NotSaved;
             return Finalize();
         }
+        AppLog.Info("save", "phase pre-flight ok");
 
         if (!CreateBackup())
         {
@@ -83,11 +88,24 @@ internal class SaveTransaction
             return Finalize();
         }
         SyncManifest("backed_up", "backed_up", updateStates: false);
+        AppLog.Info("save", $"phase backup ok dir=\"{_backupDir}\"");
 
         if (!VdfPhase()) return Finalize();
+        AppLog.Info("save", $"phase vdf ok state={StatusOf(CopyTarget.Vdf).State}");
+
         if (!LocalPhase()) return Finalize();
-        if (CloudCopyActive() && !await CloudPhaseAsync().ConfigureAwait(false))
-            return Finalize();
+        AppLog.Info("save", $"phase local ok state={StatusOf(CopyTarget.LocalJson).State}");
+
+        if (CloudCopyActive())
+        {
+            if (!await CloudPhaseAsync().ConfigureAwait(false))
+                return Finalize();
+            AppLog.Info("save", $"phase cloud ok state={StatusOf(CopyTarget.CloudBlob).State}");
+        }
+        else
+        {
+            AppLog.Info("save", "phase cloud skipped (no writable provider)");
+        }
 
         _outcomeSet ??= SaveOutcome.SavedVerified;
         SyncManifest("complete", _outcomeSet == SaveOutcome.SavedUnverified
@@ -104,6 +122,15 @@ internal class SaveTransaction
             _report.BackupDir = _backupDir;
             _report.Messages.Add($"Backups were written to \"{_backupDir}\".");
         }
+
+        AppLog.Info("save",
+            $"outcome={_report.Outcome} " +
+            $"copies=[{string.Join(" ", _report.Copies.Select(c => $"{c.Target}={c.State}"))}]" +
+            (string.IsNullOrEmpty(_backupDir) ? "" : $" backup=\"{_backupDir}\""));
+
+        foreach (var message in _report.Messages)
+            AppLog.Warn("save", message);
+
         return _report;
     }
 
@@ -129,6 +156,7 @@ internal class SaveTransaction
             }
             catch (Exception ex)
             {
+                AppLog.Exception("save", $"pre-flight read failed: \"{_paths.LocalStatsPath}\"", ex);
                 NotSaved($"Local stats file could not be read: {ex.Message}. No files were changed.");
                 return false;
             }
@@ -148,6 +176,7 @@ internal class SaveTransaction
             }
             catch (Exception ex)
             {
+                AppLog.Exception("save", $"pre-flight read failed: \"{_paths.VdfPath}\"", ex);
                 NotSaved($"localconfig.vdf could not be read: {ex.Message}. No files were changed.");
                 return false;
             }
@@ -272,6 +301,7 @@ internal class SaveTransaction
         }
         catch (Exception ex)
         {
+            AppLog.Exception("save", $"backup phase failed at \"{_backupDir}\"", ex);
             _report.Messages.Add($"Backup failed: {ex.Message}. No files were changed.");
             if (!TryCleanupBackupDir())
                 _report.Messages.Add("The incomplete backup directory could not be removed - see backups.");
@@ -335,7 +365,11 @@ internal class SaveTransaction
             _manifest.Cloud!.State = ManifestState(StatusOf(CopyTarget.CloudBlob).State);
             _manifest.Vdf!.State = ManifestState(StatusOf(CopyTarget.Vdf).State);
         }
-        try { WriteManifestFile(); } catch { }
+        try { WriteManifestFile(); }
+        catch (Exception ex)
+        {
+            AppLog.Warn("backup", $"manifest sync failed for \"{_backupDir}\": {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private static string ManifestState(CopyState s) => s switch
@@ -370,6 +404,7 @@ internal class SaveTransaction
         }
         catch (Exception ex)
         {
+            AppLog.Exception("save", $"vdf write failed: \"{_paths.VdfPath}\"", ex);
             _report.Messages.Add($"localconfig.vdf write failed: {ex.Message}.");
             SetState(CopyTarget.Vdf, CopyState.WriteFailed);
             return HandleVdfAbort();
@@ -389,6 +424,7 @@ internal class SaveTransaction
         }
         catch (Exception ex)
         {
+            AppLog.Exception("save", "vdf verify failed", ex);
             _report.Messages.Add($"localconfig.vdf verification failed: {ex.Message}.");
             ok = false;
         }
@@ -434,6 +470,7 @@ internal class SaveTransaction
         }
         catch (Exception ex)
         {
+            AppLog.Exception("save", "local serialize failed", ex);
             _report.Messages.Add($"Local stats serialization failed: {ex.Message}.");
             SetState(CopyTarget.LocalJson, CopyState.WriteFailed);
             return RollbackEarlierCopies(SaveOutcome.PartialRolledBack, "local_rolled_back");
@@ -446,6 +483,7 @@ internal class SaveTransaction
         }
         catch (Exception ex)
         {
+            AppLog.Exception("save", $"local write failed: \"{_paths.LocalStatsPath}\"", ex);
             _report.Messages.Add($"Local stats write failed: {ex.Message}.");
             SetState(CopyTarget.LocalJson, CopyState.WriteFailed);
             return RollbackEarlierCopies(SaveOutcome.PartialRolledBack, "local_rolled_back");
@@ -457,8 +495,9 @@ internal class SaveTransaction
             var writtenRoot = JsonNode.Parse(File.ReadAllText(_paths.LocalStatsPath)) as JsonObject;
             ok = ParsePlaytime(writtenRoot).SemanticallyEquals(_target);
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Exception("save", $"local verify read-back failed: \"{_paths.LocalStatsPath}\"", ex);
             ok = false;
         }
 
@@ -548,6 +587,7 @@ internal class SaveTransaction
         }
         catch (Exception ex)
         {
+            AppLog.Exception("save", "cloud serialize failed", ex);
             _report.Messages.Add($"Cloud serialization failed: {ex.Message}.");
             SetState(CopyTarget.CloudBlob, CopyState.WriteFailed);
             return RollbackEarlierCopies(SaveOutcome.PartialRolledBack, "cloud_rolled_back");
@@ -563,11 +603,13 @@ internal class SaveTransaction
         }
         catch (CloudChangedConcurrentlyException)
         {
+            AppLog.Warn("cloud", "write rejected: HTTP 412 preconditions not met (blob changed concurrently)");
             _report.Messages.Add("Cloud write was rejected: the blob changed concurrently (preconditions not met).");
             return await HandleCloudAbortAsync(concurrent: true).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
+            AppLog.Warn("cloud", $"write failed (created={created}, bytes={outBytes.Length}): {ex.GetType().Name}: {ex.Message}");
             _report.Messages.Add($"Cloud write failed: {ex.Message}.");
             return await HandleCloudAbortAsync(concurrent: false).ConfigureAwait(false);
         }
@@ -600,6 +642,7 @@ internal class SaveTransaction
         var fetch = await SafeFetchCloudAsync().ConfigureAwait(false);
         if (fetch == null)
         {
+            AppLog.Warn("cloud", "classification=re-read failed -> CloudStateUnknown (never asserting commit)");
             SetState(CopyTarget.CloudBlob, CopyState.Unverified);
             _outcomeSet = SaveOutcome.CloudStateUnknown;
             _report.Messages.Add("Cloud state could not be determined after a failed write.");
@@ -637,6 +680,7 @@ internal class SaveTransaction
     {
         if (ContainsTarget(fetch))
         {
+            AppLog.Warn("cloud", "classification=contains_target -> committed (SavedUnverified)");
             SetState(CopyTarget.CloudBlob, CopyState.Unverified);
             _outcomeSet = SaveOutcome.SavedUnverified;
             _report.Messages.Add(
@@ -647,6 +691,8 @@ internal class SaveTransaction
 
         if (CloudUnchanged(fetch, created))
         {
+            AppLog.Warn("cloud",
+                $"classification=unchanged (created={created}, concurrent={concurrent}) -> write did not land, rolling back earlier copies");
             SetState(CopyTarget.CloudBlob, CopyState.WriteFailed);
             _report.Messages.Add("Cloud write did not land; the previous blob (or its absence) is preserved. Rolling back earlier copies.");
             return RollbackEarlierCopies(
@@ -654,6 +700,8 @@ internal class SaveTransaction
                 concurrent ? "cloud_concurrent" : "cloud_write_failed");
         }
 
+        AppLog.Warn("cloud",
+            $"classification=diverged (re-read exists={fetch.Exists}, bytes={fetch.Raw?.Length ?? 0}) -> concurrent writer preserved");
         SetState(CopyTarget.CloudBlob, CopyState.Divergent);
         _report.Messages.Add(
             "Cloud now holds a different value produced by a concurrent writer; it was preserved. Earlier copies were rolled back.");
@@ -686,7 +734,10 @@ internal class SaveTransaction
             catch (Exception ex)
             {
                 if (attempt == 1)
+                {
+                    AppLog.Exception("cloud", "state re-read failed after write", ex);
                     _report.Messages.Add($"Cloud state re-read failed: {ex.Message}.");
+                }
                 await Task.Delay(150).ConfigureAwait(false);
             }
         }

@@ -39,6 +39,14 @@
                                        TargetPageType="{x:Type pages:PlaytimeEditorPage}" />
             </ui:NavigationView.MenuItems>
 
+            <ui:NavigationView.PaneFooter>
+                <TextBlock x:Name="VersionItem"
+                           Margin="16,10,16,12"
+                           FontSize="12"
+                           IsHitTestVisible="False"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+            </ui:NavigationView.PaneFooter>
+
         </ui:NavigationView>
     </Grid>
 </ui:FluentWindow>

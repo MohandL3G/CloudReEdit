@@ -106,6 +106,9 @@ public static class PlaytimeService
         long targetTotal, long lastPlayed)
     {
         bool steamRunning = SteamDetector.IsSteamRunning();
+        AppLog.Info("save",
+            $"request account={ctx.AccountId} app={ctx.AppId} target={targetTotal} min " +
+            $"steamRunning={steamRunning} steamPath=\"{SteamDetector.FindSteamPath() ?? ""}\"");
 
         ICloudProvider? provider = null;
         var cfg = SteamDetector.ReadConfig();
@@ -114,11 +117,17 @@ public static class PlaytimeService
             var (created, error) = CloudProviderFactory.Create(cfg);
             if (created == null)
             {
+                AppLog.Warn("cloud", $"provider could not be created: {error}");
                 var report = new SaveReport { Outcome = SaveOutcome.NotSaved };
                 report.Messages.Add(error ?? "Cloud provider could not be created. No files were changed.");
                 return report;
             }
             provider = created;
+            AppLog.Info("cloud", $"provider={created.GetType().Name} canWrite={created.CanWrite}");
+        }
+        else
+        {
+            AppLog.Info("cloud", "no CloudRedirect config found; saving local copies only");
         }
 
         var paths = new SavePaths
@@ -154,7 +163,19 @@ public static class PlaytimeService
     /// report the user sees.</summary>
     private static void PruneAfterSave(string backupRoot, string? currentBackupDir)
     {
-        try { BackupRetention.Prune(backupRoot, currentBackupDir); }
-        catch { }
+        try
+        {
+            var result = BackupRetention.Prune(backupRoot, currentBackupDir);
+            AppLog.Info("backup",
+                $"post-save prune of \"{backupRoot}\": scanned {result.Scanned}, " +
+                $"deleted {result.Deleted}, {result.Errors.Count} failed");
+
+            foreach (var error in result.Errors)
+                AppLog.Warn("backup", $"prune failed: {error}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Exception("backup", "post-save prune failed", ex);
+        }
     }
 }

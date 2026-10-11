@@ -70,8 +70,9 @@ public sealed class S3Provider : ICloudProvider, IDisposable
         {
             parsed = JsonNode.Parse(Encoding.UTF8.GetString(body)) as JsonObject;
         }
-        catch
+        catch (Exception ex)
         {
+            AppLog.Debug("cloud", $"blob is not valid JSON: {ex.GetType().Name}");
             parsed = null;
         }
         return new AccountStatsFetch { Exists = true, Raw = body, ETag = etag, Parsed = parsed };

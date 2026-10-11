@@ -118,7 +118,10 @@ public static class BackupRetention
                 stats.TotalBytes += DirectorySize(dir);
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLog.Debug("backup", $"stats failed for \"{backupRoot}\": {ex.GetType().Name}");
+        }
         return stats;
     }
 
@@ -192,10 +195,17 @@ public static class BackupRetention
         {
             foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
             {
-                try { total += new FileInfo(file).Length; } catch { }
+                try { total += new FileInfo(file).Length; }
+                catch (Exception sizeEx)
+                {
+                    AppLog.Debug("backup", $"size read failed for \"{file}\": {sizeEx.GetType().Name}");
+                }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLog.Debug("backup", $"size walk failed for \"{dir}\": {ex.GetType().Name}");
+        }
         return total;
     }
 

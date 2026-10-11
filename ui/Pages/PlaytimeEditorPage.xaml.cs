@@ -44,6 +44,7 @@ public partial class PlaytimeEditorPage : Page
         {
             AttachHooks();
             RefreshBackupsInfo();
+            RefreshLogsInfo();
             await LoadAsync();
         };
         Unloaded += (_, _) =>
@@ -346,7 +347,10 @@ public partial class PlaytimeEditorPage : Page
     {
         var root = BackupRetention.DefaultRoot();
         try { Directory.CreateDirectory(root); }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLog.Exception("ui", $"could not create backups folder \"{root}\"", ex);
+        }
 
         try
         {
@@ -356,7 +360,60 @@ public partial class PlaytimeEditorPage : Page
                 UseShellExecute = true
             })?.Dispose();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLog.Exception("ui", $"could not open backups folder \"{root}\"", ex);
+        }
+    }
+
+    private void RefreshLogsInfo()
+    {
+        var path = AppLog.CurrentFilePath;
+
+        if (string.IsNullOrEmpty(path))
+        {
+            LogsPanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        long size = 0;
+        try
+        {
+            if (File.Exists(path))
+                size = new FileInfo(path).Length;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Debug("ui", $"log size read failed for \"{path}\": {ex.GetType().Name}");
+        }
+
+        LogsText.Text = $"Log: {path} ({BackupRetention.FormatSize(size)})";
+        LogsPanel.Visibility = Visibility.Visible;
+    }
+
+    private void OpenLogs_Click(object sender, RoutedEventArgs e)
+    {
+        var directory = AppLog.LogDirectory;
+        if (string.IsNullOrEmpty(directory)) return;
+
+        try { Directory.CreateDirectory(directory); }
+        catch (Exception ex)
+        {
+            AppLog.Exception("ui", $"could not create logs folder \"{directory}\"", ex);
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = directory,
+                UseShellExecute = true
+            })?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Exception("ui", $"could not open logs folder \"{directory}\"", ex);
+        }
     }
 
     private void ApplyReport(SaveReport report, long total)
@@ -420,6 +477,7 @@ public partial class PlaytimeEditorPage : Page
         };
         ResultBar.IsOpen = true;
         RefreshBackupsInfo();
+        RefreshLogsInfo();
     }
 
     private string CopySummary(CopyStatus c)

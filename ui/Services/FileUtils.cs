@@ -21,7 +21,11 @@ internal static class FileUtils
         }
         catch
         {
-            try { File.Delete(tmp); } catch { }
+            try { File.Delete(tmp); }
+            catch (Exception cleanupEx)
+            {
+                AppLog.Warn("io", $"temporary file cleanup failed for \"{tmp}\": {cleanupEx.GetType().Name}: {cleanupEx.Message}");
+            }
             throw;
         }
     }
