@@ -152,6 +152,26 @@
                         IsOpen="False"
                         Margin="0,0,0,12" />
 
+            <Grid x:Name="BackupsPanel"
+                  Visibility="Collapsed"
+                  Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="BackupsText"
+                           Grid.Column="0"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                <ui:Button x:Name="OpenBackupsButton"
+                           Grid.Column="1"
+                           Content="Open backups folder"
+                           Appearance="Secondary"
+                           Margin="12,0,0,0"
+                           Click="OpenBackups_Click" />
+            </Grid>
+
             <StackPanel Orientation="Horizontal">
                 <ui:Button x:Name="SaveButton"
                            Appearance="Success"

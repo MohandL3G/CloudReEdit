@@ -1,6 +1,8 @@
 using System;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -41,6 +43,7 @@ public partial class PlaytimeEditorPage : Page
         Loaded += async (_, _) =>
         {
             AttachHooks();
+            RefreshBackupsInfo();
             await LoadAsync();
         };
         Unloaded += (_, _) =>
@@ -324,6 +327,38 @@ public partial class PlaytimeEditorPage : Page
         SaveButton.IsEnabled = enabled;
     }
 
+    private void RefreshBackupsInfo()
+    {
+        var stats = BackupRetention.GetStats(BackupRetention.DefaultRoot());
+        if (stats.Count == 0)
+        {
+            BackupsPanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        string noun = stats.Count == 1 ? "folder" : "folders";
+        BackupsText.Text =
+            $"Backups: {stats.Root} — {stats.Count} {noun}, {BackupRetention.FormatSize(stats.TotalBytes)}";
+        BackupsPanel.Visibility = Visibility.Visible;
+    }
+
+    private void OpenBackups_Click(object sender, RoutedEventArgs e)
+    {
+        var root = BackupRetention.DefaultRoot();
+        try { Directory.CreateDirectory(root); }
+        catch { }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = root,
+                UseShellExecute = true
+            })?.Dispose();
+        }
+        catch { }
+    }
+
     private void ApplyReport(SaveReport report, long total)
     {
         string backupNote = string.IsNullOrEmpty(report.BackupDir)
@@ -384,6 +419,7 @@ public partial class PlaytimeEditorPage : Page
             _ => (Wpf.Ui.Controls.InfoBarSeverity.Error, "Save failed", details),
         };
         ResultBar.IsOpen = true;
+        RefreshBackupsInfo();
     }
 
     private string CopySummary(CopyStatus c)
