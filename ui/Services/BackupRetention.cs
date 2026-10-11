@@ -74,8 +74,6 @@ public static class BackupRetention
 
             foreach (var list in pairs.Values)
             {
-                // Newest first. Ordering comes from the name's timestamp so it is
-                // stable and independent of the local clock's view of file times.
                 var ordered = list.OrderByDescending(e => e.Timestamp, StringComparer.Ordinal)
                                   .ThenBy(e => e.Path, StringComparer.Ordinal)
                                   .ToList();
