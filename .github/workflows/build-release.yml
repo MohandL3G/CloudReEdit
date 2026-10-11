@@ -11,6 +11,16 @@ on:
         description: 'Optional release notes (plain text)'
         required: false
         default: ''
+      release:
+        description: 'Publish the GitHub release (uncheck to only build the exe artifact)'
+        type: boolean
+        required: false
+        default: true
+      prerelease:
+        description: 'Mark the release as a pre-release'
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   build:
@@ -39,12 +49,17 @@ jobs:
           path: ui/bin/Release/net8.0-windows/win-x64/publish/CloudReEdit.exe
 
       - name: Publish GitHub release
+        if: inputs.release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
           NOTES: ${{ inputs.release_notes }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
+          $flags = @()
+          if ($env:PRERELEASE -eq 'true') { $flags += '--prerelease' }
+          if ($env:NOTES) { $flags += @('--notes', $env:NOTES) } else { $flags += '--generate-notes' }
           gh release create "v$env:VERSION" `
             "ui/bin/Release/net8.0-windows/win-x64/publish/CloudReEdit.exe" `
             --title "CloudReEdit v$env:VERSION" `
-            --generate-notes
+            @flags

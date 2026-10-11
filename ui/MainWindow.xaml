@@ -39,13 +39,6 @@
                                        TargetPageType="{x:Type pages:PlaytimeEditorPage}" />
             </ui:NavigationView.MenuItems>
 
-            <ui:NavigationView.FooterMenuItems>
-                <ui:NavigationViewItem x:Name="RestartSteamItem"
-                                       Content="Restart Steam"
-                                       Icon="{ui:SymbolIcon ArrowSync24}"
-                                       Click="RestartSteamItem_Click" />
-            </ui:NavigationView.FooterMenuItems>
-
         </ui:NavigationView>
     </Grid>
 </ui:FluentWindow>
