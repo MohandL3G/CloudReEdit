@@ -162,23 +162,6 @@ public partial class AccountsPage : Page
         UpdateSteamStatus();
     }
 
-    private void RestartSteam_Click(object sender, RoutedEventArgs e)
-    {
-        var steamPath = SteamDetector.FindSteamPath();
-        if (steamPath == null) return;
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = Path.Combine(steamPath, "steam.exe"),
-                UseShellExecute = true
-            })?.Dispose();
-        }
-        catch { }
-
-        UpdateSteamStatus();
-    }
-
     private void OpenGames_Click(object sender, RoutedEventArgs e)
     {
         if (AccountCombo.SelectedItem is not AccountInfo account) return;

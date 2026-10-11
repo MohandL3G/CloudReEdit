@@ -72,9 +72,6 @@
                         <ui:Button x:Name="CloseSteamButton"
                                    Content="Close Steam"
                                    Click="CloseSteam_Click" />
-                        <ui:Button Content="Restart Steam"
-                                   Margin="8,0,0,0"
-                                   Click="RestartSteam_Click" />
                         <ui:Button x:Name="OpenGamesButton"
                                    Content="Open Games"
                                    Appearance="Primary"
