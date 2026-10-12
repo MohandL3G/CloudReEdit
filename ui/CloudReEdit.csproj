@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\CloudReEdit.ico</ApplicationIcon>
     <RootNamespace>CloudReEdit</RootNamespace>
     <AssemblyName>CloudReEdit</AssemblyName>
     <Version>0.2.3</Version>
@@ -19,6 +20,10 @@
   <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
     <PackageReference Include="WPF-UI" Version="4.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\CloudReEdit.ico" />
   </ItemGroup>
 
 </Project>

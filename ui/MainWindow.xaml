@@ -4,6 +4,7 @@
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         xmlns:pages="clr-namespace:CloudReEdit.Pages"
         Title="CloudReEdit"
+        Icon="Assets/CloudReEdit.ico"
         Height="760" Width="1050"
         MinHeight="500" MinWidth="750"
         WindowStartupLocation="CenterScreen"
@@ -15,7 +16,11 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <ui:TitleBar Grid.Row="0" Title="CloudReEdit" />
+        <ui:TitleBar Grid.Row="0" Title="CloudReEdit">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Source="Assets/CloudReEdit.ico" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
 
         <ui:NavigationView x:Name="RootNavigation"
                            Grid.Row="1"
