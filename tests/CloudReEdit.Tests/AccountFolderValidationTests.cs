@@ -47,7 +47,7 @@ public sealed class AccountFolderValidationTests : IDisposable
     [InlineData("76561198000000000")]
     [InlineData("0")]
     [InlineData("42")]
-    public void LooksLikeSteamAccountId_AcceptsUnsignedIntegers(string id)
+    public void LooksLikeSteamAccountId_AcceptsNumericIdShapes(string id)
         => Assert.True(AccountScanner.LooksLikeSteamAccountId(id));
 
     [Theory]
