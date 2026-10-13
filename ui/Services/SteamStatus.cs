@@ -6,7 +6,7 @@ namespace CloudReEdit.Services;
 public static class SteamStatus
 {
     public const string NotInstalled = "Steam installation not found. Playtime editing is unavailable.";
-    public const string Running = "Steam is RUNNING. Editing playtime is blocked while Steam is open. Use \"Close Steam\" first.";
+    public const string Running = "Steam is RUNNING. Editing playtime is blocked while Steam is open - saving will close Steam for you.";
     public const string Stopped = "Steam is not running. Playtime edits can be applied safely.";
 
     public static string Text(bool steamFound, bool running)

@@ -6,6 +6,7 @@ using System.Windows.Media;
 using CloudReEdit.Resources;
 using Wpf.Ui.Controls;
 using Button = Wpf.Ui.Controls.Button;
+using CheckBox = System.Windows.Controls.CheckBox;
 using MessageBox = Wpf.Ui.Controls.MessageBox;
 using MessageBoxResult = Wpf.Ui.Controls.MessageBoxResult;
 using TextBlock = System.Windows.Controls.TextBlock;
@@ -107,4 +108,41 @@ public static class Dialog
         };
         return await box.ShowDialogAsync();
     }
+
+    /// <summary>Three-button choice with an "always do this" checkbox, for a
+    /// decision the user should only have to make once.</summary>
+    /// <remarks>The checkbox is inert on its own: it only reports whether the user
+    /// asked to be remembered. Persisting that choice is the caller's decision, so
+    /// this helper stays free of any knowledge about what "always" means.</remarks>
+    public static async Task<Choice3WithAlwaysResult> Choice3WithAlwaysAsync(
+        string title, string message,
+        string primaryText, string secondaryText, string closeText,
+        string alwaysText)
+    {
+        var always = new CheckBox
+        {
+            Content = alwaysText,
+            Margin = new Thickness(0, 12, 0, 0),
+        };
+
+        var panel = new StackPanel();
+        panel.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(always);
+
+        var box = new MessageBox
+        {
+            Title = title,
+            Content = panel,
+            PrimaryButtonText = primaryText,
+            SecondaryButtonText = secondaryText,
+            CloseButtonText = closeText,
+        };
+
+        var result = await box.ShowDialogAsync();
+        return new Choice3WithAlwaysResult(result, always.IsChecked == true);
+    }
 }
+
+/// <summary>Which button a <see cref="Dialog.Choice3WithAlwaysAsync"/> produced,
+/// plus whether the user ticked the "always do this" box.</summary>
+public sealed record Choice3WithAlwaysResult(MessageBoxResult Result, bool Always);
