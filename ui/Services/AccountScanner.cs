@@ -48,10 +48,19 @@ public static class AccountScanner
         var statsRoot = Path.Combine(steamPath, "cloud_redirect", "stats");
         if (!Directory.Exists(statsRoot)) return result;
 
+        var userdataRoot = Path.Combine(steamPath, "userdata");
+        var skipped = 0;
+
         foreach (var dir in Directory.GetDirectories(statsRoot))
         {
             var accountId = Path.GetFileName(dir);
             if (string.IsNullOrEmpty(accountId)) continue;
+
+            if (!IsAccountFolder(accountId, dir, userdataRoot))
+            {
+                skipped++;
+                continue;
+            }
 
             result.Add(new AccountInfo
             {
@@ -61,7 +70,67 @@ public static class AccountScanner
             });
         }
 
+        if (skipped > 0)
+            AppLog.Info("accounts", $"skipped {skipped} non-account folder(s) under cloud_redirect\\stats");
+
         return result.OrderBy(a => a.AccountId, System.StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>True when <paramref name="accountId"/> has the shape of a Steam
+    /// account id: a non-empty unsigned integer, the same shape
+    /// <see cref="ListGames"/> already relies on for its <c>&lt;appId&gt;.json</c>
+    /// files. Temp, backup and leftover folders can never satisfy this.</summary>
+    public static bool LooksLikeSteamAccountId(string accountId)
+        => !string.IsNullOrEmpty(accountId) && uint.TryParse(accountId, out _);
+
+    /// <summary>Decides whether a directory under <c>cloud_redirect/stats</c> is a
+    /// real Steam account. Pure apart from the two paths it is handed, so it can be
+    /// unit tested against temp directories with no Steam install present.
+    ///
+    /// <para>A folder qualifies only when its name has a plausible account-id shape
+    /// <b>and</b> either</para>
+    /// <para>• a matching folder exists under <c>userdata</c> — the strongest signal
+    /// available, and deliberately sufficient on its own so that a real account whose
+    /// stats folder is temporarily empty stays listed rather than silently
+    /// disappearing; or</para>
+    /// <para>• it contains at least one numeric <c>&lt;appId&gt;.json</c>, the same
+    /// shape <see cref="ListGames"/> enumerates.</para>
+    ///
+    /// <para>Everything else is skipped silently — no placeholder rows.</para></summary>
+    public static bool IsAccountFolder(string accountId, string statsDir, string userdataRoot)
+    {
+        if (!LooksLikeSteamAccountId(accountId)) return false;
+
+        try
+        {
+            if (Directory.Exists(Path.Combine(userdataRoot, accountId))) return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Debug("accounts", $"userdata probe failed for account {accountId}: {ex.GetType().Name}");
+        }
+
+        return HasAnyGameStats(statsDir);
+    }
+
+    private static bool HasAnyGameStats(string statsDir)
+    {
+        try
+        {
+            if (!Directory.Exists(statsDir)) return false;
+
+            foreach (var file in Directory.EnumerateFiles(statsDir, "*.json"))
+            {
+                if (uint.TryParse(Path.GetFileNameWithoutExtension(file), out _))
+                    return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Debug("accounts", $"stats probe failed for \"{statsDir}\": {ex.GetType().Name}");
+        }
+
+        return false;
     }
 
     public static List<GameEntry> ListGames(string accountId)
