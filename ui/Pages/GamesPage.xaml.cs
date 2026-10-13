@@ -70,8 +70,16 @@ public partial class GamesPage : Page
 
         foreach (var game in _games)
         {
-            game.Name = GameNames.DisplayName(game.AppId,
-                info.TryGetValue(game.AppId, out var app) ? app.Name : null);
+            var found = info.TryGetValue(game.AppId, out var app);
+            game.Name = GameNames.DisplayName(game.AppId, found ? app!.Name : null);
+
+            // Bind only a URL that already passed SteamStoreClient's validation - a
+            // Steam CDN host, or a file:// path inside the store_images cache. Anything
+            // else leaves the row imageless rather than risking a load from an
+            // unexpected location. This runs before the Refresh() below, which re-reads
+            // the bindings, so an image that only lands on a later call still appears.
+            var header = found ? app!.HeaderUrl : null;
+            game.HeaderImage = Services.SteamStoreClient.IsValidImageUrl(header) ? header! : "";
         }
 
         if (_view != null)

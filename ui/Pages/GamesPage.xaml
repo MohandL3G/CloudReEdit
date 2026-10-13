@@ -54,10 +54,27 @@
                                 Padding="16,10" Margin="0,0,0,6">
                             <Grid>
                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <StackPanel>
+                                <Image Source="{Binding HeaderImage}"
+                                       Width="184" Height="69"
+                                       Stretch="UniformToFill"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,14,0">
+                                    <Image.Style>
+                                        <Style TargetType="Image">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HeaderImage}" Value="">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Image.Style>
+                                </Image>
+                                <StackPanel Grid.Column="1">
                                     <TextBlock Text="{Binding Name}"
                                                FontSize="15" FontWeight="SemiBold"
                                                Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
@@ -66,7 +83,7 @@
                                     <TextBlock Text="{Binding LastPlayedDisplay}"
                                                Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
-                                <StackPanel Grid.Column="1"
+                                <StackPanel Grid.Column="2"
                                             Orientation="Horizontal"
                                             VerticalAlignment="Center">
                                     <TextBlock Text="{Binding AppId}"

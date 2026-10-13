@@ -9,7 +9,7 @@
     <ApplicationIcon>Assets\CloudReEdit.ico</ApplicationIcon>
     <RootNamespace>CloudReEdit</RootNamespace>
     <AssemblyName>CloudReEdit</AssemblyName>
-    <Version>0.2.4</Version>
+    <Version>0.2.5</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

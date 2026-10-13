@@ -24,6 +24,11 @@
     <Compile Include="../../ui/Services/ProviderStatus.cs" Link="Source/ProviderStatus.cs" />
     <Compile Include="../../ui/Services/SteamStatus.cs" Link="Source/SteamStatus.cs" />
     <Compile Include="../../ui/Services/SteamDetector.cs" Link="Source/SteamDetector.cs" />
+    <!-- Pulled in so AccountFolderValidation can exercise AccountScanner's
+         account-folder predicate; LocalStatsStore is AccountScanner's own
+         dependency and FileUtils (already linked below) is its transitive one. -->
+    <Compile Include="../../ui/Services/AccountScanner.cs" Link="Source/AccountScanner.cs" />
+    <Compile Include="../../ui/Services/LocalStatsStore.cs" Link="Source/LocalStatsStore.cs" />
     <Compile Include="../../ui/Services/Cloud/CloudProviderFactory.cs" Link="Source/Cloud/CloudProviderFactory.cs" />
     <Compile Include="../../ui/Services/Cloud/UnsupportedProvider.cs" Link="Source/Cloud/UnsupportedProvider.cs" />
     <Compile Include="../../ui/Resources/S.cs" Link="Source/S.cs" />
