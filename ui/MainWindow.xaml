@@ -44,6 +44,12 @@
                                        TargetPageType="{x:Type pages:PlaytimeEditorPage}" />
             </ui:NavigationView.MenuItems>
 
+            <ui:NavigationView.FooterMenuItems>
+                <ui:NavigationViewItem Content="Settings"
+                                       Icon="{ui:SymbolIcon Settings24}"
+                                       TargetPageType="{x:Type pages:SettingsPage}" />
+            </ui:NavigationView.FooterMenuItems>
+
             <ui:NavigationView.PaneFooter>
                 <TextBlock x:Name="VersionItem"
                            Margin="16,10,16,12"

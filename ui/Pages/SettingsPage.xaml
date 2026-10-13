@@ -1,0 +1,85 @@
+<Page x:Class="CloudReEdit.Pages.SettingsPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      ScrollViewer.CanContentScroll="False">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24">
+        <StackPanel MaxWidth="800">
+            <TextBlock Text="Settings"
+                       FontSize="28" FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+            <TextBlock Text="Preferences are saved to %AppData%\CloudReEdit\settings.json"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       TextWrapping="Wrap" Margin="0,0,0,16" />
+
+            <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="20">
+                <StackPanel>
+                    <TextBlock Text="Steam behaviour when saving"
+                               FontSize="15" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                    <TextBlock Text="A playtime save always closes Steam first, because Steam may otherwise overwrite the changes. This chooses what happens to Steam once the save is finished."
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" Margin="0,4,0,12" />
+
+                    <RadioButton x:Name="AskRadio"
+                                 GroupName="SteamBehaviour"
+                                 Checked="Behaviour_Changed"
+                                 Margin="0,6,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Ask"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                            <TextBlock Text="Ask what to do each time Steam is running when you save."
+                                       FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </RadioButton>
+
+                    <RadioButton x:Name="AlwaysOpenRadio"
+                                 GroupName="SteamBehaviour"
+                                 Checked="Behaviour_Changed"
+                                 Margin="0,10,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Always open"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                            <TextBlock Text="Reopen Steam once the save finishes, even if it was closed before."
+                                       FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </RadioButton>
+
+                    <RadioButton x:Name="NeverOpenRadio"
+                                 GroupName="SteamBehaviour"
+                                 Checked="Behaviour_Changed"
+                                 Margin="0,10,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Never open"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                            <TextBlock Text="Leave Steam closed after the save. Start it yourself when you want it back."
+                                       FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </RadioButton>
+
+                    <RadioButton x:Name="LastStateRadio"
+                                 GroupName="SteamBehaviour"
+                                 Checked="Behaviour_Changed"
+                                 Margin="0,10,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Last state"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}" />
+                            <TextBlock Text="Put Steam back the way it was before the save: open it only if it was open."
+                                       FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </RadioButton>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

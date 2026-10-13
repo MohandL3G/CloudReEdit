@@ -252,14 +252,10 @@ public partial class PlaytimeEditorPage : Page
     {
         if (_ctx == null || _isSaving) return false;
 
-        if (SteamDetector.IsSteamRunning())
-        {
-            ResultBar.Severity = Wpf.Ui.Controls.InfoBarSeverity.Warning;
-            ResultBar.Title = "Steam is running";
-            ResultBar.Message = "Close Steam before editing playtime, otherwise Steam may overwrite your changes.";
-            ResultBar.IsOpen = true;
-            return false;
-        }
+        // Steam has to be out of the way before the pre-flight reads a single
+        // byte, and whether it comes back up afterwards is a saved preference.
+        var steam = await PrepareSteamAsync();
+        if (steam.Abort) return false;
 
         // Lock the screen while saving. The captured snapshot is the exact state
         // the user sees right now: any pending grid cell edit is committed first
@@ -269,6 +265,9 @@ public partial class PlaytimeEditorPage : Page
         long lastPlayed = GetLastPlayedUnix();
         var snapshot = _ctx.Local.Clone();
 
+        // Declared outside the try so the finally can tell whether Steam should
+        // go back up, whichever path the save ends up taking.
+        bool committed = false;
         SetSavingState(true);
         try
         {
@@ -276,7 +275,7 @@ public partial class PlaytimeEditorPage : Page
             // A committed save re-loads the canonical state, which also resets the
             // dirty baseline. A failed save never reloads and leaves the user's
             // edits (and therefore the dirty state) in place.
-            bool committed = report.Outcome is SaveOutcome.SavedVerified or SaveOutcome.SavedUnverified;
+            committed = report.Outcome is SaveOutcome.SavedVerified or SaveOutcome.SavedUnverified;
             if (committed)
                 await LoadAsync();
             ApplyReport(report, total);
@@ -292,8 +291,101 @@ public partial class PlaytimeEditorPage : Page
         }
         finally
         {
+            FinishSteam(steam, committed);
             SetSavingState(false);
         }
+    }
+
+    /// <summary>Whether a save should go ahead once the Steam question is settled.</summary>
+    /// <param name="Abort">Stop before anything is read or written. True for both
+    /// a user cancel and a Steam that refused to close.</param>
+    /// <param name="Closed">We actually took Steam down, so it is on us to say
+    /// where it went if it does not come back.</param>
+    /// <param name="ReopenAfter">Put Steam back up once the save succeeds.</param>
+    private sealed record SteamPrep(bool Abort, bool Closed, bool ReopenAfter);
+
+    /// <summary>Resolves what happens to Steam around this save: asks when the
+    /// preference is <see cref="SaveSteamBehaviour.Ask"/>, closes Steam, and
+    /// reports whether to put it back afterwards. Runs before the pre-flight,
+    /// which requires Steam closed, so a cancellation here writes nothing at all.</summary>
+    private async Task<SteamPrep> PrepareSteamAsync()
+    {
+        var behaviour = AppSettings.LoadSaveSteamBehaviour();
+
+        if (!SteamDetector.IsSteamRunning())
+        {
+            // Nothing to close. "Always open" still means open when we are done,
+            // even though Steam played no part in getting the save done.
+            return new SteamPrep(
+                Abort: false,
+                Closed: false,
+                ReopenAfter: behaviour == SaveSteamBehaviour.AlwaysOpen);
+        }
+
+        bool reopen;
+        if (behaviour == SaveSteamBehaviour.Ask)
+        {
+            var choice = await Dialog.Choice3WithAlwaysAsync(
+                "Steam must be closed",
+                "Steam is running, so it has to be closed before saving - otherwise Steam may overwrite your changes. What should happen once the save is finished?",
+                S.Get("Dialog_CloseReopen"),
+                S.Get("Dialog_CloseOnly"),
+                S.Get("Dialog_Cancel"),
+                S.Get("Dialog_AlwaysDoThis"));
+
+            if (choice.Result == Wpf.Ui.Controls.MessageBoxResult.None)
+            {
+                AppLog.Info("steam", "playtime save cancelled from the steam dialog, nothing was written");
+                return new SteamPrep(Abort: true, Closed: false, ReopenAfter: false);
+            }
+
+            reopen = choice.Result == Wpf.Ui.Controls.MessageBoxResult.Primary;
+
+            if (choice.Always)
+            {
+                var chosen = reopen ? SaveSteamBehaviour.AlwaysOpen : SaveSteamBehaviour.NeverOpen;
+                AppSettings.SetSaveSteamBehaviour(chosen);
+                AppLog.Info("steam",
+                    $"user asked to always {AppSettings.SaveSteamBehaviourToken(chosen)}, preference saved");
+            }
+        }
+        else
+        {
+            reopen = behaviour switch
+            {
+                // Steam is up right now, so its most recent state was "running".
+                SaveSteamBehaviour.LastState => true,
+                SaveSteamBehaviour.AlwaysOpen => true,
+                _ => false,
+            };
+        }
+
+        if (!await SteamController.CloseSteamAsync())
+        {
+            AppLog.Warn("steam", "steam did not close in time, aborting the save before any read or write");
+            ResultBar.Severity = Wpf.Ui.Controls.InfoBarSeverity.Error;
+            ResultBar.Title = "Steam is still running";
+            ResultBar.Message = "Steam did not close in time, so nothing was saved. Close Steam yourself and try again.";
+            ResultBar.IsOpen = true;
+            return new SteamPrep(Abort: true, Closed: false, ReopenAfter: false);
+        }
+
+        return new SteamPrep(Abort: false, Closed: true, ReopenAfter: reopen);
+    }
+
+    /// <summary>Restarts Steam after a save we took it down for. A failed save
+    /// deliberately leaves it closed rather than reopening over files that may be
+    /// half-written - so the user is told instead of left guessing.</summary>
+    private void FinishSteam(SteamPrep prep, bool committed)
+    {
+        if (prep.ReopenAfter && committed)
+        {
+            SteamController.StartSteam();
+            return;
+        }
+
+        if (prep.Closed && !committed && ResultBar.IsOpen)
+            ResultBar.Message = $"{ResultBar.Message}\nSteam was closed for the save and has been left closed.";
     }
 
     // Commits the value being typed into a data-grid cell so the model, the

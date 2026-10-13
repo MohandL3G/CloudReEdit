@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
@@ -130,7 +129,6 @@ public partial class AccountsPage : Page
         bool found = SteamDetector.FindSteamPath() != null;
         bool running = found && SteamDetector.IsSteamRunning();
         SteamRunningText.Text = SteamStatus.Text(found, running);
-        CloseSteamButton.IsEnabled = running;
     }
 
     private void AccountCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -141,27 +139,6 @@ public partial class AccountsPage : Page
     private async void Refresh_Click(object sender, RoutedEventArgs e)
     {
         await RefreshAsync();
-    }
-
-    private async void CloseSteam_Click(object sender, RoutedEventArgs e)
-    {
-        var steamPath = SteamDetector.FindSteamPath();
-        if (steamPath == null) return;
-
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = Path.Combine(steamPath, "steam.exe"),
-            Arguments = "-shutdown",
-            UseShellExecute = true
-        })?.Dispose();
-
-        for (int i = 0; i < 30; i++)
-        {
-            await Task.Delay(500);
-            if (!SteamDetector.IsSteamRunning()) break;
-        }
-
-        UpdateSteamStatus();
     }
 
     private void OpenGames_Click(object sender, RoutedEventArgs e)

@@ -38,6 +38,7 @@
     <Compile Include="../../ui/Services/BackupManifest.cs" Link="Source/BackupManifest.cs" />
     <Compile Include="../../ui/Services/BackupRetention.cs" Link="Source/BackupRetention.cs" />
     <Compile Include="../../ui/Services/AppLog.cs" Link="Source/AppLog.cs" />
+    <Compile Include="../../ui/Services/AppSettings.cs" Link="Source/AppSettings.cs" />
     <Compile Include="../../ui/Services/AppVersion.cs" Link="Source/AppVersion.cs" />
     <Compile Include="../../ui/Services/SaveTransaction.cs" Link="Source/SaveTransaction.cs" />
     <Compile Include="../../ui/Services/Cloud/ICloudProvider.cs" Link="Source/Cloud/ICloudProvider.cs" />

@@ -69,13 +69,9 @@
                                TextWrapping="Wrap" Margin="0,0,0,12" />
 
                     <StackPanel Orientation="Horizontal">
-                        <ui:Button x:Name="CloseSteamButton"
-                                   Content="Close Steam"
-                                   Click="CloseSteam_Click" />
                         <ui:Button x:Name="OpenGamesButton"
                                    Content="Open Games"
                                    Appearance="Primary"
-                                   Margin="16,0,0,0"
                                    IsEnabled="False"
                                    Click="OpenGames_Click" />
                     </StackPanel>
