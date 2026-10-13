@@ -22,6 +22,13 @@ public sealed class GameEntry
     public string AccountId { get; set; } = "";
     public uint AppId { get; set; }
     public string Name { get; set; } = "";
+
+    // Steam store header capsule URI for the list artwork. It is validated by
+    // SteamStoreClient.IsValidImageUrl before it ever gets here, so an empty value
+    // means "no usable artwork" and the template collapses the image column
+    // rather than leaving a placeholder artifact behind.
+    public string HeaderImage { get; set; } = "";
+
     public long PlaytimeMinutes { get; set; }
     public long LastPlayed { get; set; }
 
