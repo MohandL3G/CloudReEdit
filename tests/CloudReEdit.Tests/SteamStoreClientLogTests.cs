@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 using CloudReEdit.Services;
@@ -32,8 +31,21 @@ public class SteamStoreClientLogTests : IDisposable
         try { Directory.Delete(_logDir, recursive: true); } catch { }
     }
 
+    /// <summary>Reads everything the logger wrote. Opens each file with an explicit
+    /// FileShare.ReadWrite because AppLog keeps its writer handle open during the
+    /// test (FileAccess.Write, FileShare.Read): plain File.ReadAllText would be
+    /// refused by Windows file-sharing rules while Linux allows it.</summary>
     private string ReadLog()
-        => string.Join("\n", Directory.GetFiles(_logDir).Select(File.ReadAllText));
+    {
+        var texts = new List<string>();
+        foreach (var file in Directory.GetFiles(_logDir))
+        {
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            texts.Add(reader.ReadToEnd());
+        }
+        return string.Join("\n", texts);
+    }
 
     [Fact]
     public async Task ApiHttpFailure_LogsTheStatusCode()
