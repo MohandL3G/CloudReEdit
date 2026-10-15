@@ -41,13 +41,21 @@ internal sealed class SteamStoreClient : IDisposable
     private static readonly TimeSpan DiskCacheTtl = TimeSpan.FromDays(7);
     private static readonly TimeSpan ImageCacheTtl = TimeSpan.FromDays(60);
     private const long MaxCachedImageBytes = 5 * 1024 * 1024;
-    private static readonly string CachePath = Path.Combine(
+    private static readonly string DefaultCachePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "CloudRedirect", "store_cache.json");
 
-    private static readonly string ImageCacheDir = Path.Combine(
+    private static readonly string DefaultImageCacheDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "CloudRedirect", "store_images");
+
+    private static readonly byte[] JpegMagic = { 0xFF, 0xD8, 0xFF };
+    private static readonly byte[] PngMagic = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+    private static readonly byte[] RiffMagic = { (byte)'R', (byte)'I', (byte)'F', (byte)'F' };
+    private static readonly byte[] WebpMagic = { (byte)'W', (byte)'E', (byte)'B', (byte)'P' };
+
+    private readonly string _cachePath;
+    private readonly string _imageCacheDir;
 
     private static readonly string[] AllowedCdnHosts = new[]
     {
@@ -63,16 +71,37 @@ internal sealed class SteamStoreClient : IDisposable
 
     private readonly ConcurrentDictionary<string, Task> _inFlightDownloads = new();
 
-    public SteamStoreClient()
+    public SteamStoreClient() : this(null, null, null)
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
     }
 
+    /// <summary>Test seam: an explicit message handler (a stub never follows
+    /// redirects on its own, so it can script the final response URI), plus cache
+    /// locations that default to CloudRedirect's AppData folder.</summary>
+    internal SteamStoreClient(HttpMessageHandler? handler, string? cachePath, string? imageCacheDir)
+    {
+        _http = handler == null
+            ? new HttpClient { Timeout = TimeSpan.FromSeconds(15) }
+            : new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
+        _cachePath = cachePath ?? DefaultCachePath;
+        _imageCacheDir = imageCacheDir ?? DefaultImageCacheDir;
+    }
+
+    /// <summary>True when <paramref name="url"/> is an absolute https URL on a
+    /// Steam CDN/store host.</summary>
     public static bool IsValidSteamCdnUrl(string? url)
     {
         if (string.IsNullOrEmpty(url)) return false;
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
-        if (uri.Scheme != "https") return false;
+        return IsAllowedResponseUri(uri);
+    }
+
+    /// <summary>True only for https URIs on a Steam CDN/store host. Every HTTP
+    /// response - the store API call and image downloads alike - must land on an
+    /// allowed URI after redirects, otherwise the response is discarded.</summary>
+    public static bool IsAllowedResponseUri(Uri? uri)
+    {
+        if (uri == null || uri.Scheme != "https") return false;
 
         var host = uri.Host;
         foreach (var allowed in AllowedCdnHosts)
@@ -94,7 +123,7 @@ internal sealed class SteamStoreClient : IDisposable
         try
         {
             normalizedLocal = Path.GetFullPath(uri.LocalPath);
-            normalizedCache = Path.GetFullPath(ImageCacheDir);
+            normalizedCache = Path.GetFullPath(DefaultImageCacheDir);
         }
         catch (Exception ex)
         {
@@ -112,12 +141,12 @@ internal sealed class SteamStoreClient : IDisposable
     public static bool IsValidImageUrl(string? url)
         => IsValidSteamCdnUrl(url) || IsValidCachedImagePath(url);
 
-    private static string GetCachedImagePath(string cdnUrl)
+    private string GetCachedImagePath(string cdnUrl)
     {
         Span<byte> hash = stackalloc byte[32];
         SHA256.HashData(Encoding.UTF8.GetBytes(cdnUrl), hash);
         var hex = Convert.ToHexString(hash[..8]);
-        return Path.Combine(ImageCacheDir, $"{hex}.jpg");
+        return Path.Combine(_imageCacheDir, $"{hex}.jpg");
     }
 
     public async Task<Dictionary<uint, StoreAppInfo>> GetAppInfoAsync(IReadOnlyList<uint> appIds)
@@ -190,14 +219,17 @@ internal sealed class SteamStoreClient : IDisposable
         return result;
     }
 
-    private async Task DownloadImageToCacheAsync(string cdnUrl, string localPath)
+    /// <summary>Downloads one header image into the cache. The response is only
+    /// kept when it lands on an allowed Steam CDN host after redirects and its
+    /// bytes are a real JPEG, PNG or WebP image; anything else is discarded.</summary>
+    internal async Task DownloadImageToCacheAsync(string cdnUrl, string localPath)
     {
         if (!IsValidSteamCdnUrl(cdnUrl)) return;
 
         string? tmp = null;
         try
         {
-            Directory.CreateDirectory(ImageCacheDir);
+            Directory.CreateDirectory(_imageCacheDir);
 
             if (File.Exists(localPath)) return;
 
@@ -205,6 +237,12 @@ internal sealed class SteamStoreClient : IDisposable
             if (!resp.IsSuccessStatusCode)
             {
                 AppLog.Warn("store", $"image download failed with HTTP {(int)resp.StatusCode}: {cdnUrl}");
+                return;
+            }
+
+            if (!IsAllowedResponseUri(resp.RequestMessage?.RequestUri))
+            {
+                AppLog.Warn("store", $"image download rejected: redirected outside the Steam CDN allowlist: {cdnUrl}");
                 return;
             }
 
@@ -238,6 +276,12 @@ internal sealed class SteamStoreClient : IDisposable
                 return;
             }
 
+            if (!FileLooksLikeImage(tmp))
+            {
+                AppLog.Warn("store", $"image download was not a JPEG, PNG or WebP image: {cdnUrl}");
+                return;
+            }
+
             File.Move(tmp, localPath, overwrite: true);
             tmp = null;
         }
@@ -258,15 +302,45 @@ internal sealed class SteamStoreClient : IDisposable
         }
     }
 
-    private static void EvictStaleImages()
+    /// <summary>True when <paramref name="header"/> starts with a JPEG
+    /// (<c>FF D8 FF</c>), PNG (<c>89 50 4E 47 0D 0A 1A 0A</c>) or WebP
+    /// (<c>RIFF....WEBP</c>) signature.</summary>
+    internal static bool LooksLikeImage(ReadOnlySpan<byte> header)
+    {
+        if (header.Length >= JpegMagic.Length && header[..JpegMagic.Length].SequenceEqual(JpegMagic))
+            return true;
+        if (header.Length >= PngMagic.Length && header[..PngMagic.Length].SequenceEqual(PngMagic))
+            return true;
+        return header.Length >= 12 &&
+               header[..RiffMagic.Length].SequenceEqual(RiffMagic) &&
+               header.Slice(8, WebpMagic.Length).SequenceEqual(WebpMagic);
+    }
+
+    private static bool FileLooksLikeImage(string path)
+    {
+        try
+        {
+            Span<byte> header = stackalloc byte[16];
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            int read = fs.Read(header);
+            return LooksLikeImage(header[..read]);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Debug("store", $"image header read failed: {ex.GetType().Name}");
+            return false;
+        }
+    }
+
+    private void EvictStaleImages()
     {
         int evicted = 0;
         try
         {
-            if (!Directory.Exists(ImageCacheDir)) return;
+            if (!Directory.Exists(_imageCacheDir)) return;
             var cutoff = DateTime.UtcNow - ImageCacheTtl;
 
-            foreach (var file in Directory.EnumerateFiles(ImageCacheDir, "*.jpg"))
+            foreach (var file in Directory.EnumerateFiles(_imageCacheDir, "*.jpg"))
             {
                 try
                 {
@@ -283,7 +357,7 @@ internal sealed class SteamStoreClient : IDisposable
             }
 
             var tmpCutoff = DateTime.UtcNow - TimeSpan.FromMinutes(10);
-            foreach (var file in Directory.EnumerateFiles(ImageCacheDir, "*.tmp"))
+            foreach (var file in Directory.EnumerateFiles(_imageCacheDir, "*.tmp"))
             {
                 try
                 {
@@ -308,7 +382,9 @@ internal sealed class SteamStoreClient : IDisposable
         }
     }
 
-    private async Task<Dictionary<uint, StoreAppInfo>> FetchFromApiAsync(List<uint> appIds)
+    /// <summary>Queries the Steam store API. A response that lands on a host
+    /// outside the Steam allowlist after redirects is discarded as a whole.</summary>
+    internal async Task<Dictionary<uint, StoreAppInfo>> FetchFromApiAsync(List<uint> appIds)
     {
         var result = new Dictionary<uint, StoreAppInfo>();
 
@@ -329,6 +405,12 @@ internal sealed class SteamStoreClient : IDisposable
             var resp = await _http.GetAsync(url).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
                 return result;
+
+            if (!IsAllowedResponseUri(resp.RequestMessage?.RequestUri))
+            {
+                AppLog.Warn("store", "store API response rejected: redirected outside the Steam allowlist");
+                return result;
+            }
 
             var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
             using var doc = JsonDocument.Parse(body);
@@ -381,9 +463,9 @@ internal sealed class SteamStoreClient : IDisposable
         {
             if (_diskLoaded) return;
 
-            if (File.Exists(CachePath))
+            if (File.Exists(_cachePath))
             {
-                var json = await File.ReadAllTextAsync(CachePath).ConfigureAwait(false);
+                var json = await File.ReadAllTextAsync(_cachePath).ConfigureAwait(false);
                 var cache = JsonSerializer.Deserialize(json, StoreCacheJsonContext.Default.StoreCache);
                 if (cache?.Entries != null)
                 {
@@ -398,7 +480,7 @@ internal sealed class SteamStoreClient : IDisposable
         }
         catch (Exception ex)
         {
-            AppLog.Exception("store", $"store cache load failed: \"{CachePath}\"", ex);
+            AppLog.Exception("store", $"store cache load failed: \"{_cachePath}\"", ex);
             _diskLoaded = true;
         }
         finally
@@ -407,25 +489,46 @@ internal sealed class SteamStoreClient : IDisposable
         }
     }
 
-    private async Task SaveDiskCacheAsync()
+    /// <summary>Persists the in-memory cache to <c>store_cache.json</c>. Overlapping
+    /// saves are serialized through the same lock as the disk load, and the file is
+    /// replaced atomically (temp file + move), so concurrent fire-and-forget saves
+    /// can neither collide nor leave a half-written file behind. The JSON schema is
+    /// deliberately unchanged - the file lives in CloudRedirect's folder and is
+    /// shared with it.</summary>
+    internal async Task SaveDiskCacheAsync()
     {
+        bool taken = false;
         try
         {
+            await _diskLock.WaitAsync().ConfigureAwait(false);
+            taken = true;
+
             var cache = new StoreCache
             {
                 Entries = new Dictionary<uint, StoreAppInfo>(_mem)
             };
 
-            var dir = Path.GetDirectoryName(CachePath);
+            var dir = Path.GetDirectoryName(_cachePath);
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
 
             var json = JsonSerializer.Serialize(cache, StoreCacheJsonContext.Default.StoreCache);
-            await File.WriteAllTextAsync(CachePath, json).ConfigureAwait(false);
+            FileUtils.AtomicWriteAllText(_cachePath, json);
         }
         catch (Exception ex)
         {
-            AppLog.Exception("store", $"store cache save failed: \"{CachePath}\"", ex);
+            AppLog.Exception("store", $"store cache save failed: \"{_cachePath}\"", ex);
+        }
+        finally
+        {
+            if (taken)
+            {
+                try { _diskLock.Release(); }
+                catch (Exception ex)
+                {
+                    AppLog.Debug("store", $"store cache lock release failed: {ex.GetType().Name}");
+                }
+            }
         }
     }
 

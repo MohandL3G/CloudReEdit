@@ -5,11 +5,13 @@ namespace CloudReEdit.Services;
 
 /// <summary>Reads the app version from the assembly so the UI, the logs and the
 /// release tag can never drift apart. No version string is hardcoded anywhere;
-/// the value comes from <c>ui/CloudReEdit.csproj</c>'s <c>&lt;Version&gt;</c>.</summary>
+/// the value comes from <c>ui/CloudReEdit.csproj</c>'s <c>&lt;VersionPrefix&gt;</c>
+/// and <c>&lt;VersionSuffix&gt;</c> (e.g. <c>0.2.7-pre-release</c>).</summary>
 public static class AppVersion
 {
-    /// <summary>The version in tag form, e.g. <c>0.2.3</c>. Falls back to an empty
-    /// string rather than throwing.</summary>
+    /// <summary>The version exactly as the app should display it, e.g.
+    /// <c>0.2.7-pre-release</c>. Build metadata (<c>+...</c>) added by the build
+    /// is stripped. Falls back to an empty string rather than throwing.</summary>
     public static string Display()
     {
         try
@@ -18,11 +20,9 @@ public static class AppVersion
 
             var informational = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
                                         ?.InformationalVersion;
-            if (!string.IsNullOrEmpty(informational))
-            {
-                var buildMetadata = informational.IndexOf('+');
-                return buildMetadata >= 0 ? informational.Substring(0, buildMetadata) : informational;
-            }
+            var stripped = StripBuildMetadata(informational);
+            if (!string.IsNullOrEmpty(stripped))
+                return stripped;
 
             var version = asm.GetName().Version;
             return version == null ? "" : $"{version.Major}.{version.Minor}.{version.Build}";
@@ -31,5 +31,18 @@ public static class AppVersion
         {
             return "";
         }
+    }
+
+    /// <summary>Removes <c>+buildMetadata</c> from an informational version, so a
+    /// release build shows <c>0.2.7-pre-release</c> instead of
+    /// <c>0.2.7-pre-release+&lt;commit&gt;</c>. Returns null for null/empty input.</summary>
+    public static string? StripBuildMetadata(string? informationalVersion)
+    {
+        if (string.IsNullOrEmpty(informationalVersion)) return null;
+
+        var buildMetadata = informationalVersion.IndexOf('+');
+        return buildMetadata >= 0
+            ? informationalVersion.Substring(0, buildMetadata)
+            : informationalVersion;
     }
 }

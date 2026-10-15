@@ -28,6 +28,7 @@ internal class SaveTransaction
     private readonly SavePaths _paths;
     private readonly ICloudProvider? _cloud;
     private readonly bool _steamRunning;
+    private readonly Func<bool> _isSteamRunningNow;
     private readonly long _requestedTotal;
     private readonly long _requestedLastPlayed;
 
@@ -48,13 +49,28 @@ internal class SaveTransaction
     private string _backupDir = "";
     private BackupManifest _manifest = new();
 
+    /// <summary>Builds the transaction for one save. Nothing is read or written
+    /// until <see cref="RunAsync"/> runs.</summary>
+    /// <param name="scope">The account/app and the frozen source model to save.</param>
+    /// <param name="paths">Local stats path, VDF path and backup root.</param>
+    /// <param name="cloud">Writable cloud provider, or null / read-only to skip the cloud copy.</param>
+    /// <param name="requestedTotal">Target lifetime total in minutes.</param>
+    /// <param name="requestedLastPlayed">Target last-played unix timestamp.</param>
+    /// <param name="steamRunning">Whether Steam was running when the pre-flight
+    /// check ran; the save aborts before reading anything when true.</param>
+    /// <param name="isSteamRunningNow">Fresh Steam check invoked immediately before
+    /// the first write, so a Steam that started while pre-flight was reading aborts
+    /// the save. Defaults to the pre-flight flag; the caller normally passes
+    /// <c>SteamDetector.IsSteamRunning</c>.</param>
     public SaveTransaction(SaveScope scope, SavePaths paths, ICloudProvider? cloud,
-        long requestedTotal, long requestedLastPlayed, bool steamRunning)
+        long requestedTotal, long requestedLastPlayed, bool steamRunning,
+        Func<bool>? isSteamRunningNow = null)
     {
         _scope = scope;
         _paths = paths;
         _cloud = cloud;
         _steamRunning = steamRunning;
+        _isSteamRunningNow = isSteamRunningNow ?? (() => steamRunning);
         _requestedTotal = requestedTotal;
         _requestedLastPlayed = requestedLastPlayed;
 
@@ -81,6 +97,9 @@ internal class SaveTransaction
             return Finalize();
         }
         AppLog.Info("save", "phase pre-flight ok");
+
+        if (!SteamStillClosed())
+            return Finalize();
 
         if (!CreateBackup())
         {
@@ -135,6 +154,31 @@ internal class SaveTransaction
     }
 
     // ---------------- Pre-flight (no target mutations) ----------------
+
+    /// <summary>Re-checks Steam immediately before the first write. The
+    /// <c>steamRunning</c> flag was captured before pre-flight ran, so Steam could
+    /// have started in the meantime - when it is running here, nothing at all is
+    /// written. A failing check is logged and treated as closed so a probe error
+    /// can never block every save.</summary>
+    private bool SteamStillClosed()
+    {
+        bool running;
+        try
+        {
+            running = _isSteamRunningNow();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Exception("save", "fresh Steam check before writing failed", ex);
+            return true;
+        }
+
+        if (!running) return true;
+
+        AppLog.Warn("save", "steam started while saving; aborting before the first write");
+        NotSaved("Steam started while saving; close it and try again. No files were changed.");
+        return false;
+    }
 
     private async Task<bool> PreFlightAsync()
     {

@@ -111,4 +111,65 @@ public class ProviderStatusTests
         Assert.Equal(ProviderReadiness.UnusableConfig, r.State);
         Assert.Equal(ProviderStatus.UnusableConfig, ProviderStatus.Text(r.State, r.DisplayName, r.Error));
     }
+
+    [Fact]
+    public void PlainHttpEndpoint_IsFlaggedButDoesNotBlockSaving()
+    {
+        var tokenPath = Path.Combine(Path.GetTempPath(), $"cre-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(tokenPath,
+                "{\"access_key_id\":\"AK\",\"secret_access_key\":\"SK\",\"bucket\":\"b\"," +
+                "\"endpoint\":\"http://storage.internal:9000\",\"region\":\"us-east-1\",\"key_prefix\":\"\"}");
+
+            var r = ProviderStatus.Classify(true, new CloudConfig("s3", tokenPath, null));
+
+            Assert.Equal(ProviderReadiness.Ready, r.State);
+            Assert.True(r.InsecureEndpoint);
+            Assert.Null(r.Error);
+        }
+        finally
+        {
+            File.Delete(tokenPath);
+        }
+    }
+
+    [Theory]
+    [InlineData("https://example.com")]
+    [InlineData("objects.example.com")]
+    public void HttpsOrSchemelessEndpoint_IsNotFlagged(string endpoint)
+    {
+        var tokenPath = Path.Combine(Path.GetTempPath(), $"cre-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(tokenPath,
+                "{\"access_key_id\":\"AK\",\"secret_access_key\":\"SK\",\"bucket\":\"b\"," +
+                $"\"endpoint\":\"{endpoint}\",\"region\":\"us-east-1\",\"key_prefix\":\"\"}}");
+
+            var r = ProviderStatus.Classify(true, new CloudConfig("s3", tokenPath, null));
+
+            Assert.Equal(ProviderReadiness.Ready, r.State);
+            Assert.False(r.InsecureEndpoint);
+        }
+        finally
+        {
+            File.Delete(tokenPath);
+        }
+    }
+
+    [Fact]
+    public void MissingOrUnusableConfig_NeverFlagsInsecureEndpoint()
+    {
+        Assert.False(ProviderStatus.Classify(false, null).InsecureEndpoint);
+        Assert.False(ProviderStatus.Classify(true, null).InsecureEndpoint);
+        Assert.False(ProviderStatus.Classify(true, new CloudConfig("mystery", null, null)).InsecureEndpoint);
+    }
+
+    [Fact]
+    public void InsecureEndpointWarning_NeverContainsAnEndpointValue()
+    {
+        Assert.Contains("http://", ProviderStatus.InsecureEndpointWarning, StringComparison.Ordinal);
+        Assert.DoesNotContain("storage.internal", ProviderStatus.InsecureEndpointWarning, StringComparison.Ordinal);
+        Assert.DoesNotContain(":", ProviderStatus.InsecureEndpointWarning.Replace("http://", ""), StringComparison.Ordinal);
+    }
 }

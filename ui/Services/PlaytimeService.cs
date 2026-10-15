@@ -57,6 +57,8 @@ public static class PlaytimeService
             else
             {
                 ctx.CloudCanWrite = provider.CanWrite;
+                if (provider is S3Provider s3 && s3.UsesInsecureEndpoint)
+                    ctx.Warnings.Add(ProviderStatus.InsecureEndpointWarning);
                 try
                 {
                     var fetch = await provider.GetAccountStatsAsync(accountId).ConfigureAwait(false);
@@ -144,7 +146,7 @@ public static class PlaytimeService
             Source = source,
         }, paths,
             provider != null && provider.CanWrite ? provider : null,
-            targetTotal, lastPlayed, steamRunning);
+            targetTotal, lastPlayed, steamRunning, SteamDetector.IsSteamRunning);
         try
         {
             var report = await txn.RunAsync().ConfigureAwait(false);

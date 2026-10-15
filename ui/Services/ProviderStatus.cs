@@ -21,14 +21,23 @@ public static class ProviderStatus
     public const string MissingConfig = "CloudRedirect is not configured.";
     public const string UnusableConfig = "CloudRedirect configuration exists but could not be used.";
 
-    public static (ProviderReadiness State, string? DisplayName, string? Error) Classify(
+    /// <summary>Non-blocking warning shown next to the provider status when the
+    /// configured storage endpoint is plain <c>http://</c>. Saving is never
+    /// blocked by it, and it never contains the endpoint value itself.</summary>
+    public const string InsecureEndpointWarning =
+        "The storage endpoint uses plain http:// - requests to it (including signed ones) are sent unencrypted.";
+
+    /// <summary>Readiness of the configured provider, plus whether its endpoint is
+    /// plain <c>http://</c> (<paramref name="InsecureEndpoint"/>) so the UI can warn
+    /// without blocking.</summary>
+    public static (ProviderReadiness State, string? DisplayName, string? Error, bool InsecureEndpoint) Classify(
         bool configFileExists, CloudConfig? config)
     {
         if (!configFileExists)
-            return (ProviderReadiness.MissingConfig, null, null);
+            return (ProviderReadiness.MissingConfig, null, null, false);
 
         if (config == null)
-            return (ProviderReadiness.UnusableConfig, null, null);
+            return (ProviderReadiness.UnusableConfig, null, null, false);
 
         var (provider, error) = CloudProviderFactory.Create(config);
         try
@@ -38,12 +47,13 @@ public static class ProviderStatus
                 var message = config.Provider == "folder" && string.IsNullOrEmpty(config.SyncPath)
                     ? "Folder sync path is not configured."
                     : error;
-                return (ProviderReadiness.Error, config.DisplayName, message);
+                return (ProviderReadiness.Error, config.DisplayName, message, false);
             }
 
+            bool insecure = provider is S3Provider s3 && s3.UsesInsecureEndpoint;
             return provider.CanWrite
-                ? (ProviderReadiness.Ready, provider.DisplayName, null)
-                : (ProviderReadiness.ReadOnly, provider.DisplayName, null);
+                ? (ProviderReadiness.Ready, provider.DisplayName, null, insecure)
+                : (ProviderReadiness.ReadOnly, provider.DisplayName, null, insecure);
         }
         finally
         {

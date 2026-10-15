@@ -84,10 +84,6 @@ public static class AccountScanner
     }
 
     /// <summary>True when <paramref name="accountId"/> has the shape of a Steam
-    /// account id: a non-empty unsigned integer, the same shape
-    /// <see cref="ListGames"/> already relies on for its <c>&lt;appId&gt;.json</c>
-    /// files. Temp, backup and leftover folders can never satisfy this.</summary>
-    /// <summary>True when <paramref name="accountId"/> has the shape of a Steam
     /// account id: 1-20 ASCII digits. That covers both forms Steam actually uses -
     /// the 32-bit account id that names <c>userdata</c> folders, and the 17-digit
     /// SteamID64 - so a real account can never be rejected for being the wrong

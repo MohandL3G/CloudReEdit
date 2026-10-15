@@ -9,7 +9,12 @@
     <ApplicationIcon>Assets\CloudReEdit.ico</ApplicationIcon>
     <RootNamespace>CloudReEdit</RootNamespace>
     <AssemblyName>CloudReEdit</AssemblyName>
-    <Version>0.2.6</Version>
+    <!-- Single source of the app version: VersionPrefix + VersionSuffix feeds the
+         assembly/file version (numeric 0.2.7.0) and the informational version
+         shown in the UI footer and the logs (0.2.7-pre-release). Drop the
+         VersionSuffix line for the next stable release. -->
+    <VersionPrefix>0.2.7</VersionPrefix>
+    <VersionSuffix>pre-release</VersionSuffix>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

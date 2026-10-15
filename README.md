@@ -1,7 +1,9 @@
 # CloudReEdit
 
-> **WARNING: This project has only been tested with S3-compatible storage
-> (AWS S3 / Cloudflare R2).** Google Drive, OneDrive, and local-only providers
+> **WARNING: Cloud writes have only been tested against a self-hosted RustFS
+> server (S3-compatible).** Other S3-compatible services — AWS S3, Cloudflare
+> R2, MinIO, … — are expected to work (the request signing is the same code) but
+> have **not** been tested. Google Drive, OneDrive, and local-only providers
 > are treated as **read-only** — cloud writes for them are not implemented and
 > have **not** been tested. If you use one of those, your edits will not reach
 > the cloud copy and Steam may overwrite them.
@@ -22,8 +24,8 @@ writes them consistently in a single save.
 > storage, and have synced at least once** so its config (`config.json`), the
 > credentials file, and the per-app stats JSON files exist on disk. CloudReEdit
 > does not create or configure storage — it only reads and edits what
-> CloudRedirect already produced. Use an **S3-compatible bucket** (S3 / R2) for
-> cloud writes to actually work.
+> CloudRedirect already produced. Use an **S3-compatible bucket** for cloud
+> writes to actually work (self-hosted RustFS is the setup that was tested).
 
 1. **Install & configure CloudRedirect** first with an S3-compatible bucket, and
    let it sync at least once. Close Steam before continuing.
@@ -31,18 +33,42 @@ writes them consistently in a single save.
    Runtime).
 3. **Accounts page** — the Steam install path and the cloud provider (read from
    CloudRedirect's `config.json`) are auto-detected; there's no provider picker.
-   Pick your account. The app shows whether cloud writes are supported for it.
+   Pick your account. The app shows whether cloud writes are supported for it,
+   and warns (without blocking anything) when the configured endpoint is plain
+   `http://`, i.e. unencrypted.
 4. **Games page** — pick a game from the list (names are fetched from the Steam
    store) and click edit.
 5. **Playtime editor** — set the total in **minutes** or **hours**, optionally
    adjust the **per-device breakdown** and **last played** date, then click
    **Save playtime**.
-   - The app blocks saving while Steam is running.
+   - If Steam is running, saving first asks whether to close it — **close and
+     reopen**, **close only**, or **cancel** — with an *"always do this"*
+     checkbox so you only decide once (the choice lives under **Settings**).
+   - Steam must actually be closed: if it does not close in time, nothing is
+     written.
+   - Right before the first write the app checks Steam once more; if Steam
+     started again while the save was being prepared, the save aborts with
+     nothing changed.
    - Before writing, it backs up all three copies to
      `%AppData%\CloudReEdit\backups\<timestamp>\`.
    - If the total differs from the sum of devices, the difference is stored in
      the `__migrated_localconfig` balance bucket on save.
-6. **Restart Steam** and verify the playtime stuck in your library.
+6. **Restart Steam** if the save left it closed, and verify the playtime stuck in
+   your library.
+
+### Settings page
+
+**Settings → Steam behaviour when saving** decides what happens to Steam once a
+save finishes: **Ask** (default — prompt every time), **Always open**, **Never
+open**, or **Last state** (put it back the way it was). Preferences are saved to
+`%AppData%\CloudReEdit\settings.json`.
+
+### Editor page
+
+The editor prompts **Save / Discard / Cancel** when you leave it (or close the
+window) with unsaved changes. It also shows where the current **log file** lives
+with an *Open* button, and (once backups exist) where the backup folder is, how
+many backup folders there are and how big they are.
 
 ## Features
 
@@ -50,10 +76,16 @@ writes them consistently in a single save.
 - Edit playtime as **minutes or hours**, with a full per-device breakdown.
 - Adjust **last played** date.
 - Keeps `localconfig.vdf`, the local stats JSON, and the cloud blob in sync.
-- Cloud writes for **S3 / R2** (signed requests, same as CloudRedirect).
+- Cloud writes for **S3-compatible buckets** (signed requests, same as
+  CloudRedirect; tested against a self-hosted RustFS server).
 - Read-only cloud mode for Google Drive / OneDrive / local providers.
-- Automatic backups before every save: `%AppData%\CloudReEdit\backups\<timestamp>\`.
-- Blocks saving while Steam is running, to avoid Steam overwriting your edits.
+- Automatic backups before every save: `%AppData%\CloudReEdit\backups\<timestamp>\`,
+  pruned automatically (5 newest per account + game are kept).
+- Closes Steam before saving — with a prompt you can remember — and aborts with
+  nothing written if Steam is or becomes running.
+- Warns when the configured storage endpoint is plain `http://` (unencrypted).
+- Rolling daily log file under `%AppData%\CloudReEdit\logs\`.
+- Shows its version in the sidebar footer (e.g. `CloudReEdit 0.2.7-pre-release`).
 
 ## How playtime is stored
 
@@ -76,6 +108,9 @@ Saves are designed to leave no half-written state behind:
 - Copies are written in a fixed order (VDF → local → cloud). If a later copy
   fails, the earlier ones are automatically restored to their exact pre-save
   byte state and the save reports the failure — it never claims success.
+- Steam is checked **twice**: once before anything is read, and again right
+  before the first write. If Steam is running at either point the save aborts
+  with nothing changed ("Steam started while saving; close it and try again").
 - Cloud writes are **conditional**: the app sends the pre-save ETag with the
   upload and aborts if it no longer matches, so it never silently overwrites a
   concurrent change made by another device or a Steam sync.
@@ -90,8 +125,12 @@ ones. Note:
 
 - There is **no in-app restore** feature; recovery is manual.
 - `cloud_stats.json` holds the pre-save cloud blob, but the app never re-uploads
-  backups — restoring the cloud copy requires your own S3/R2 tooling.
-- Backups are not cleaned up automatically.
+  backups — restoring the cloud copy requires your own S3-compatible tooling.
+- Backups **are** cleaned up automatically: after every save (and once at
+  startup) old backup folders are pruned, keeping the **5 newest per account +
+  game**. The backup created by the save that triggered the pruning is never
+  removed by it, and folders that don't follow the app's backup naming scheme
+  are left alone.
 
 ## Privacy & credentials
 
@@ -101,8 +140,18 @@ ones. Note:
   Google Drive / OneDrive / local providers are never used for writes.
 - Game names and header images are fetched from Steam's **public store APIs** and
   cached under `%AppData%\CloudRedirect\store_cache.json` and `store_images\`.
+  Store responses are only accepted over HTTPS from Steam's own hosts (even
+  after a redirect), and downloaded images are verified to be real JPEG/PNG/WebP
+  data before they are cached.
 - The only other network traffic is reading and writing your cloud stats blob
-  (`{prefix}{accountId}/0/stats.json`) on S3 / R2.
+  (`{prefix}{accountId}/0/stats.json`) on S3 / R2. If the endpoint in
+  CloudRedirect's credentials is plain `http://`, that traffic is unencrypted —
+  the app shows a warning next to the provider status (Accounts page and the
+  editor's information bar) and writes one to the log, but does not block
+  saving.
+- Everything the app does is written to a rolling log at
+  `%AppData%\CloudReEdit\logs\CloudReEdit-yyyyMMdd.log` (one file per day, the
+  7 newest kept, each capped at 5 MB). Credentials are never logged.
 - No telemetry, analytics, or data logging anywhere in the app.
 
 ## Limitations
@@ -122,8 +171,8 @@ ones. Note:
 
 ## Requirements
 
-- **CloudRedirect** already installed and configured with storage (S3 / R2 for
-  cloud writes).
+- **CloudRedirect** already installed and configured with storage (an
+  S3-compatible bucket for cloud writes).
 - **Running the app**: .NET 8 Desktop Runtime (Windows).
 - **Building from source**: .NET 8 SDK (or newer), Windows.
 
@@ -159,21 +208,35 @@ Output: `ui\bin\Release\net8.0-windows\win-x64\publish\CloudReEdit.exe`
 
 ## Release via GitHub Actions
 
-The repo ships a `workflow_dispatch` workflow. On GitHub:
+The repo ships a `workflow_dispatch` workflow (`.github/workflows/build-release.yml`).
+On GitHub:
 
 1. Open **Actions** → **Build & Release** → **Run workflow**.
-2. Set the version (defaults to `0.1.0`) and optional release notes.
-3. Run it. The workflow builds the exe, uploads it as a build artifact, and
-   publishes it to a GitHub Release tagged `v<version>`.
+2. Set the inputs:
 
-The version is a manual input, not read from the csproj — keep it in sync with
-the `<Version>` in `ui/CloudReEdit.csproj`, and pick a version that does not
-already have a `v<version>` tag or release (0.1.0 is already taken).
+   | Input | Default | What it does |
+   |---|---|---|
+   | `version` | `0.2.7` | Version to tag the release with (`v<version>`). |
+   | `release_notes` | *(empty)* | Optional plain-text notes; when empty, GitHub's generated notes are used. |
+   | `release` | checked | Publish the GitHub release. Uncheck to only build the exe and upload it as a build artifact. |
+   | `prerelease` | unchecked | Mark the release as a pre-release. |
+
+3. Run it. The workflow runs the unit tests, publishes the single-file exe,
+   uploads it as the `CloudReEdit` artifact, and — when `release` is checked —
+   creates the release `v<version>` titled `CloudReEdit v<version>` with the exe
+   attached.
+
+The `version` input is manual, not read from the csproj — keep it in sync with
+the `<VersionPrefix>` in `ui/CloudReEdit.csproj`, and pick a version that does
+not already have a `v<version>` tag or release. The version shown inside the app
+comes from `<VersionPrefix>` + `<VersionSuffix>` in the csproj (currently
+`0.2.7-pre-release`; drop the `<VersionSuffix>` line for the next stable
+release).
 
 ## Disclaimer
 
 Playtime edits are cosmetic. Editing files while Steam is running (or a cloud
 sync is in progress) can result in Steam overwriting your changes — close Steam
 before saving, and rely on the backups in `%AppData%\CloudReEdit\backups` if
-anything looks off. This tool was only tested against S3-compatible storage; use
-it at your own risk.
+anything looks off. This tool was only tested against a self-hosted RustFS
+(S3-compatible) server; use it at your own risk.
