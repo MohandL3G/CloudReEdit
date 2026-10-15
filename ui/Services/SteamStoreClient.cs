@@ -41,11 +41,27 @@ internal sealed class SteamStoreClient : IDisposable
     private static readonly TimeSpan DiskCacheTtl = TimeSpan.FromDays(7);
     private static readonly TimeSpan ImageCacheTtl = TimeSpan.FromDays(60);
     private const long MaxCachedImageBytes = 5 * 1024 * 1024;
-    private static readonly string DefaultCachePath = Path.Combine(
+    private const int MaxRedirectHops = 5;
+
+    /// <summary>Default location of the shared store cache
+    /// (<c>%AppData%\CloudRedirect\store_cache.json</c>).
+    ///
+    /// Deliberately a computed property, not a <c>static readonly</c> field:
+    /// <see cref="Shared"/> is built while this type's static fields are still
+    /// initializing (static field initializers run in textual order and
+    /// <c>Shared</c> is declared first), so a field read from the constructor
+    /// would capture its default value - null - and every lookup would then
+    /// fail on a null path. Evaluating on each read makes the value correct no
+    /// matter when it is asked for. Regression-pinned by
+    /// <c>SharedSingleton_ResolvesItsCachePathsDuringConstruction</c>.</summary>
+    private static string DefaultCachePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "CloudRedirect", "store_cache.json");
 
-    private static readonly string DefaultImageCacheDir = Path.Combine(
+    /// <summary>Default image cache directory next to
+    /// <see cref="DefaultCachePath"/>; evaluated on each read for the same
+    /// static-initialization reason.</summary>
+    private static string DefaultImageCacheDir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "CloudRedirect", "store_images");
 
@@ -57,12 +73,19 @@ internal sealed class SteamStoreClient : IDisposable
     private readonly string _cachePath;
     private readonly string _imageCacheDir;
 
+    /// <summary>Hosts an image download may be sent to (and may land on after
+    /// redirects): Steam CDN/store hosts by suffix.</summary>
     private static readonly string[] AllowedCdnHosts = new[]
     {
         ".steamstatic.com",
         ".steampowered.com",
         ".steamcdn-a.akamaihd.net"
     };
+
+    /// <summary>The single host the store API call may be sent to (and may land
+    /// on after redirects). Deliberately exact: the API allowlist is per-purpose
+    /// and much narrower than the CDN allowlist above.</summary>
+    private const string AllowedApiHost = "api.steampowered.com";
 
     private readonly HttpClient _http;
     private readonly ConcurrentDictionary<uint, StoreAppInfo> _mem = new();
@@ -71,17 +94,27 @@ internal sealed class SteamStoreClient : IDisposable
 
     private readonly ConcurrentDictionary<string, Task> _inFlightDownloads = new();
 
+    /// <summary>Creates the shared client with CloudRedirect's default cache
+    /// locations.</summary>
     public SteamStoreClient() : this(null, null, null)
     {
     }
 
     /// <summary>Test seam: an explicit message handler (a stub never follows
     /// redirects on its own, so it can script the final response URI), plus cache
-    /// locations that default to CloudRedirect's AppData folder.</summary>
+    /// locations that default to CloudRedirect's AppData folder.
+    ///
+    /// Redirects are followed manually by
+    /// <see cref="GetFollowingRedirectsAsync"/> so every hop can be checked
+    /// against the per-purpose allowlist before the request is sent, which needs
+    /// auto-redirect off on the real handler.</summary>
     internal SteamStoreClient(HttpMessageHandler? handler, string? cachePath, string? imageCacheDir)
     {
         _http = handler == null
-            ? new HttpClient { Timeout = TimeSpan.FromSeconds(15) }
+            ? new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false })
+            {
+                Timeout = TimeSpan.FromSeconds(15)
+            }
             : new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
         _cachePath = cachePath ?? DefaultCachePath;
         _imageCacheDir = imageCacheDir ?? DefaultImageCacheDir;
@@ -96,14 +129,27 @@ internal sealed class SteamStoreClient : IDisposable
         return IsAllowedResponseUri(uri);
     }
 
-    /// <summary>True only for https URIs on a Steam CDN/store host. Every HTTP
-    /// response - the store API call and image downloads alike - must land on an
-    /// allowed URI after redirects, otherwise the response is discarded.</summary>
+    /// <summary>True only for https URIs on a Steam CDN/store host - the
+    /// allowlist every image download must stay inside, on the initial request
+    /// and on every redirect hop.</summary>
     public static bool IsAllowedResponseUri(Uri? uri)
+        => IsAllowedUri(uri, allowedHost: null);
+
+    /// <summary>True only for https URIs on the Steam store API host - the much
+    /// narrower allowlist the store API call must stay inside, on the initial
+    /// request and on every redirect hop. A CDN host is deliberately NOT enough
+    /// here: the API and the CDN are separate purposes with separate lists.</summary>
+    public static bool IsAllowedApiUri(Uri? uri)
+        => IsAllowedUri(uri, AllowedApiHost);
+
+    private static bool IsAllowedUri(Uri? uri, string? allowedHost)
     {
         if (uri == null || uri.Scheme != "https") return false;
 
         var host = uri.Host;
+        if (allowedHost != null)
+            return host.Equals(allowedHost, StringComparison.OrdinalIgnoreCase);
+
         foreach (var allowed in AllowedCdnHosts)
         {
             if (host.EndsWith(allowed, StringComparison.OrdinalIgnoreCase))
@@ -149,6 +195,12 @@ internal sealed class SteamStoreClient : IDisposable
         return Path.Combine(_imageCacheDir, $"{hex}.jpg");
     }
 
+    /// <summary>Returns store info for the requested apps: fresh cache entries
+    /// first, then one Steam API fetch for the misses. Failed or partial lookups
+    /// are returned for display but never persisted (see <see cref="IsComplete"/>),
+    /// so they are refetched on the next call instead of being served until their
+    /// TTL expires. The per-entry image pass is guarded so one unusable entry can
+    /// never discard the names of every other game on the page.</summary>
     public async Task<Dictionary<uint, StoreAppInfo>> GetAppInfoAsync(IReadOnlyList<uint> appIds)
     {
         if (appIds.Count == 0)
@@ -180,7 +232,15 @@ internal sealed class SteamStoreClient : IDisposable
             AppLog.Info("store", $"store API returned {fetched.Count} of {toFetch.Count} requested app(s)");
             foreach (var (id, info) in fetched)
             {
-                _mem[id] = info;
+                if (IsComplete(info))
+                {
+                    _mem[id] = info;
+                }
+                else
+                {
+                    AppLog.Debug("store",
+                        $"not caching incomplete entry app={id} (name='{info.Name}', headerUrl={(string.IsNullOrEmpty(info.HeaderUrl) ? "missing" : info.HeaderUrl)}) - it will be fetched again next time");
+                }
                 result[id] = info;
             }
 
@@ -190,41 +250,59 @@ internal sealed class SteamStoreClient : IDisposable
         foreach (var key in result.Keys.ToArray())
         {
             var info = result[key];
-            if (!IsValidSteamCdnUrl(info.HeaderUrl)) continue;
+            try
+            {
+                if (!IsValidSteamCdnUrl(info.HeaderUrl)) continue;
 
-            var localPath = GetCachedImagePath(info.HeaderUrl!);
-            if (File.Exists(localPath))
-            {
-                var rewritten = new StoreAppInfo
+                var localPath = GetCachedImagePath(info.HeaderUrl!);
+                if (File.Exists(localPath))
                 {
-                    Name = info.Name,
-                    HeaderUrl = new Uri(localPath).AbsoluteUri,
-                    FetchedUtc = info.FetchedUtc
-                };
-                result[key] = rewritten;
-                AppLog.Debug("store", $"image cache hit app={key}");
+                    var rewritten = new StoreAppInfo
+                    {
+                        Name = info.Name,
+                        HeaderUrl = new Uri(localPath).AbsoluteUri,
+                        FetchedUtc = info.FetchedUtc
+                    };
+                    result[key] = rewritten;
+                    AppLog.Debug("store", $"image cache hit app={key}");
+                }
+                else
+                {
+                    AppLog.Debug("store", $"image cache miss app={key}");
+                    _ = _inFlightDownloads.GetOrAdd(localPath, lp =>
+                        DownloadImageToCacheAsync(info.HeaderUrl!, lp)
+                            .ContinueWith(t =>
+                            {
+                                _inFlightDownloads.TryRemove(lp, out _);
+                            }, TaskScheduler.Default));
+                }
             }
-            else
+            catch (Exception ex)
             {
-                AppLog.Debug("store", $"image cache miss app={key}");
-                _ = _inFlightDownloads.GetOrAdd(localPath, lp =>
-                    DownloadImageToCacheAsync(info.HeaderUrl!, lp)
-                        .ContinueWith(t =>
-                        {
-                            _inFlightDownloads.TryRemove(lp, out _);
-                        }, TaskScheduler.Default));
+                AppLog.Exception("store", $"image cache check failed app={key}", ex);
             }
         }
 
         return result;
     }
 
+    /// <summary>True for the only entries worth caching: a fetched name plus a
+    /// header URL that is allowed on the Steam CDN. Everything else is a failed
+    /// or partial lookup and is refetched instead of served from the cache.</summary>
+    private static bool IsComplete(StoreAppInfo info)
+        => !string.IsNullOrEmpty(info.Name) && IsValidSteamCdnUrl(info.HeaderUrl);
+
     /// <summary>Downloads one header image into the cache. The response is only
-    /// kept when it lands on an allowed Steam CDN host after redirects and its
-    /// bytes are a real JPEG, PNG or WebP image; anything else is discarded.</summary>
+    /// kept when it stays on an allowed Steam CDN host - on the initial URL and
+    /// on every redirect hop - and its bytes are a real JPEG, PNG or WebP image;
+    /// anything else is discarded and logged with the reason.</summary>
     internal async Task DownloadImageToCacheAsync(string cdnUrl, string localPath)
     {
-        if (!IsValidSteamCdnUrl(cdnUrl)) return;
+        if (!IsValidSteamCdnUrl(cdnUrl))
+        {
+            AppLog.Warn("store", $"image download rejected: \"{cdnUrl}\" is not an allowed Steam CDN URL");
+            return;
+        }
 
         string? tmp = null;
         try
@@ -233,7 +311,11 @@ internal sealed class SteamStoreClient : IDisposable
 
             if (File.Exists(localPath)) return;
 
-            using var resp = await _http.GetAsync(cdnUrl, HttpCompletionOption.ResponseHeadersRead);
+            using var resp = await GetFollowingRedirectsAsync(
+                cdnUrl, IsAllowedResponseUri, "image download",
+                HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            if (resp == null) return;
+
             if (!resp.IsSuccessStatusCode)
             {
                 AppLog.Warn("store", $"image download failed with HTTP {(int)resp.StatusCode}: {cdnUrl}");
@@ -242,7 +324,7 @@ internal sealed class SteamStoreClient : IDisposable
 
             if (!IsAllowedResponseUri(resp.RequestMessage?.RequestUri))
             {
-                AppLog.Warn("store", $"image download rejected: redirected outside the Steam CDN allowlist: {cdnUrl}");
+                AppLog.Warn("store", $"image download rejected: response landed on \"{resp.RequestMessage?.RequestUri?.Host}\" outside the Steam CDN allowlist: {cdnUrl}");
                 return;
             }
 
@@ -382,8 +464,74 @@ internal sealed class SteamStoreClient : IDisposable
         }
     }
 
-    /// <summary>Queries the Steam store API. A response that lands on a host
-    /// outside the Steam allowlist after redirects is discarded as a whole.</summary>
+    /// <summary>Sends a GET and follows redirects itself, checking the initial
+    /// URL and every hop against <paramref name="isAllowedUri"/> before the
+    /// request is sent, so a request never leaves the machine for a host outside
+    /// the per-purpose allowlist. Returns the final response, or null when a hop
+    /// was rejected or the hop limit was hit - the reason is already in
+    /// <see cref="AppLog"/>.</summary>
+    private async Task<HttpResponseMessage?> GetFollowingRedirectsAsync(
+        string url, Func<Uri, bool> isAllowedUri, string purpose, HttpCompletionOption completionOption)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var current))
+        {
+            AppLog.Warn("store", $"{purpose} rejected: \"{url}\" is not an absolute URL");
+            return null;
+        }
+
+        for (int hop = 0; hop <= MaxRedirectHops; hop++)
+        {
+            if (!isAllowedUri(current))
+            {
+                AppLog.Warn("store", $"{purpose} rejected: host \"{current.Host}\" is not allowed");
+                return null;
+            }
+
+            HttpResponseMessage resp;
+            try
+            {
+                resp = await _http.GetAsync(current, completionOption).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Exception("store", $"{purpose} failed for host \"{current.Host}\"", ex);
+                return null;
+            }
+
+            if ((int)resp.StatusCode < 300 || (int)resp.StatusCode >= 400)
+                return resp;
+
+            var location = resp.Headers.Location;
+            if (location == null)
+            {
+                AppLog.Warn("store",
+                    $"{purpose} failed: HTTP {(int)resp.StatusCode} redirect from \"{current.Host}\" without a Location header");
+                resp.Dispose();
+                return null;
+            }
+
+            var next = location.IsAbsoluteUri ? location : new Uri(current, location);
+            resp.Dispose();
+
+            if (!isAllowedUri(next))
+            {
+                AppLog.Warn("store",
+                    $"{purpose} redirect rejected: \"{current.Host}\" -> \"{next.Host}\" leaves the Steam allowlist");
+                return null;
+            }
+
+            current = next;
+        }
+
+        AppLog.Warn("store", $"{purpose} failed: more than {MaxRedirectHops} redirects");
+        return null;
+    }
+
+    /// <summary>Queries the Steam store API. The call may only be sent to - and
+    /// land on - the Steam store API host, on the initial request and on every
+    /// redirect hop; a response that fails any of those checks, any HTTP status
+    /// check, or the JSON parse is discarded as a whole and logged with the
+    /// reason.</summary>
     internal async Task<Dictionary<uint, StoreAppInfo>> FetchFromApiAsync(List<uint> appIds)
     {
         var result = new Dictionary<uint, StoreAppInfo>();
@@ -400,60 +548,88 @@ internal sealed class SteamStoreClient : IDisposable
 
             var inputJson = JsonSerializer.Serialize(requestObj);
             var encoded = Uri.EscapeDataString(inputJson);
-            var url = $"https://api.steampowered.com/IStoreBrowseService/GetItems/v1?input_json={encoded}";
+            var url = $"https://{AllowedApiHost}/IStoreBrowseService/GetItems/v1?input_json={encoded}";
 
-            var resp = await _http.GetAsync(url).ConfigureAwait(false);
-            if (!resp.IsSuccessStatusCode)
+            using var resp = await GetFollowingRedirectsAsync(
+                url, IsAllowedApiUri, "store API request",
+                HttpCompletionOption.ResponseContentRead).ConfigureAwait(false);
+            if (resp == null)
                 return result;
 
-            if (!IsAllowedResponseUri(resp.RequestMessage?.RequestUri))
+            if (!resp.IsSuccessStatusCode)
             {
-                AppLog.Warn("store", "store API response rejected: redirected outside the Steam allowlist");
+                AppLog.Warn("store",
+                    $"store API returned HTTP {(int)resp.StatusCode} for {appIds.Count} requested app(s)");
+                return result;
+            }
+
+            if (!IsAllowedApiUri(resp.RequestMessage?.RequestUri))
+            {
+                AppLog.Warn("store",
+                    $"store API response rejected: landed on \"{resp.RequestMessage?.RequestUri?.Host}\" instead of the Steam store API host");
                 return result;
             }
 
             var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
-            using var doc = JsonDocument.Parse(body);
 
-            if (!doc.RootElement.TryGetProperty("response", out var response))
-                return result;
-            if (!response.TryGetProperty("store_items", out var items))
-                return result;
-
-            foreach (var item in items.EnumerateArray())
+            try
             {
-                if (!item.TryGetProperty("appid", out var appIdEl))
-                    continue;
+                using var doc = JsonDocument.Parse(body);
 
-                uint appId = appIdEl.GetUInt32();
-
-                var info = new StoreAppInfo
+                if (!doc.RootElement.TryGetProperty("response", out var response))
                 {
-                    FetchedUtc = DateTime.UtcNow
-                };
-
-                if (item.TryGetProperty("name", out var nameEl))
-                    info.Name = nameEl.GetString() ?? "";
-
-                if (item.TryGetProperty("assets", out var assets) &&
-                    assets.TryGetProperty("header", out var headerEl))
+                    AppLog.Warn("store", "store API response had no \"response\" section");
+                    return result;
+                }
+                if (!response.TryGetProperty("store_items", out var items))
                 {
-                    var header = headerEl.GetString();
-                    if (!string.IsNullOrEmpty(header))
-                        info.HeaderUrl = $"https://shared.steamstatic.com/store_item_assets/steam/apps/{appId}/{header}";
+                    AppLog.Warn("store", "store API response had no \"store_items\" section");
+                    return result;
                 }
 
-                result[appId] = info;
+                foreach (var item in items.EnumerateArray())
+                {
+                    if (!item.TryGetProperty("appid", out var appIdEl))
+                        continue;
+
+                    uint appId = appIdEl.GetUInt32();
+
+                    var info = new StoreAppInfo
+                    {
+                        FetchedUtc = DateTime.UtcNow
+                    };
+
+                    if (item.TryGetProperty("name", out var nameEl))
+                        info.Name = nameEl.GetString() ?? "";
+
+                    if (item.TryGetProperty("assets", out var assets) &&
+                        assets.TryGetProperty("header", out var headerEl))
+                    {
+                        var header = headerEl.GetString();
+                        if (!string.IsNullOrEmpty(header))
+                            info.HeaderUrl = $"https://shared.steamstatic.com/store_item_assets/steam/apps/{appId}/{header}";
+                    }
+
+                    result[appId] = info;
+                }
+            }
+            catch (JsonException ex)
+            {
+                AppLog.Exception("store", "store API response could not be parsed", ex);
             }
         }
         catch (Exception ex)
         {
-            AppLog.Exception("store", "store API response could not be parsed", ex);
+            AppLog.Exception("store", "store API response could not be read", ex);
         }
 
         return result;
     }
 
+    /// <summary>Loads <c>store_cache.json</c> once. Entries that are missing a
+    /// name or a usable header URL are dropped instead of loaded, so a poisoned
+    /// cache file self-heals: those apps are refetched on the next lookup and the
+    /// rewritten file no longer contains them.</summary>
     private async Task EnsureDiskCacheLoaded()
     {
         if (_diskLoaded) return;
@@ -470,7 +646,15 @@ internal sealed class SteamStoreClient : IDisposable
                 if (cache?.Entries != null)
                 {
                     foreach (var (id, info) in cache.Entries)
+                    {
+                        if (!IsComplete(info))
+                        {
+                            AppLog.Warn("store",
+                                $"dropping incomplete store cache entry app={id} (name='{info.Name}', headerUrl={(string.IsNullOrEmpty(info.HeaderUrl) ? "missing" : info.HeaderUrl)}) - it will be fetched again");
+                            continue;
+                        }
                         _mem.TryAdd(id, info);
+                    }
                 }
             }
 

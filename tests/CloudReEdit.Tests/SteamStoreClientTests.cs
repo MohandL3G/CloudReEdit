@@ -1,22 +1,20 @@
 using System;
-using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
 using CloudReEdit.Services;
 using Xunit;
+using static CloudReEdit.Tests.SteamStoreFixtures;
 
 namespace CloudReEdit.Tests;
 
 public class SteamStoreClientTests
 {
-    private const string CdnUrl = "https://shared.steamstatic.com/store_item_assets/steam/apps/440/header.jpg";
-
     // ---------------- URL allowlist ----------------
 
     [Theory]
@@ -30,12 +28,13 @@ public class SteamStoreClientTests
     [InlineData("https://evilsteamstatic.com/x.jpg", false)]
     [InlineData("https://steamstatic.com.attacker.example/x.jpg", false)]
     [InlineData("https://attacker.example/.steamstatic.com/x.jpg", false)]
-    [InlineData("https://example.com/x.jpg", false)]
-    [InlineData("ftp://shared.steamstatic.com/x.jpg", false)]
     [InlineData("", false)]
-    [InlineData(null, false)]
-    public void IsValidSteamCdnUrl_OnlyAllowsHttpsOnSteamHosts(string? url, bool expected)
-        => Assert.Equal(expected, SteamStoreClient.IsValidSteamCdnUrl(url));
+    [InlineData("not a url", false)]
+    [InlineData("ftp://shared.steamstatic.com/x.jpg", false)]
+    public void IsValidSteamCdnUrl_ChecksSchemeAndHost(string url, bool expected)
+    {
+        Assert.Equal(expected, SteamStoreClient.IsValidSteamCdnUrl(url));
+    }
 
     [Fact]
     public void IsAllowedResponseUri_ChecksSchemeAndHostOfTheFinalUri()
@@ -46,6 +45,47 @@ public class SteamStoreClientTests
         Assert.False(SteamStoreClient.IsAllowedResponseUri(new Uri("https://attacker.example/steal")));
         Assert.False(SteamStoreClient.IsAllowedResponseUri(new Uri("http://shared.steamstatic.com/x.jpg")));
         Assert.False(SteamStoreClient.IsAllowedResponseUri(null));
+    }
+
+    // ---------------- per-purpose API allowlist ----------------
+
+    [Theory]
+    [InlineData("https://api.steampowered.com/IStoreBrowseService/GetItems/v1", true)]
+    [InlineData("https://api.steampowered.com/?input_json=%7B%7D", true)]
+    [InlineData("https://shared.steamstatic.com/store_item_assets/steam/apps/1/header.jpg", false)]
+    [InlineData("https://shared.steampowered.com/x.jpg", false)]
+    [InlineData("https://store.steampowered.com/app/440", false)]
+    [InlineData("https://partner.steampowered.com/x", false)]
+    [InlineData("https://api.steampowered.com.evil.example/x", false)]
+    [InlineData("https://steam-api.evil.example/x", false)]
+    [InlineData("http://api.steampowered.com/x", false)]
+    [InlineData(null, false)]
+    public void IsAllowedApiUri_AllowsOnlyTheSteamStoreApiHost(string? url, bool expected)
+    {
+        Assert.Equal(expected, SteamStoreClient.IsAllowedApiUri(url == null ? null : new Uri(url)));
+    }
+
+    // ---------------- static initialization (regression for the 0.2.7-pre-release
+    // Games-page bug: Shared was built before the static path fields, so the
+    // singleton ran with null paths) ----------------
+
+    [Fact]
+    public void SharedSingleton_ResolvesItsCachePathsDuringConstruction()
+    {
+        var type = typeof(SteamStoreClient);
+        var cachePathField = type.GetField("_cachePath", BindingFlags.NonPublic | BindingFlags.Instance);
+        var imageDirField = type.GetField("_imageCacheDir", BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(cachePathField);
+        Assert.NotNull(imageDirField);
+
+        var shared = SteamStoreClient.Shared;
+        var cachePath = (string?)cachePathField!.GetValue(shared);
+        var imageDir = (string?)imageDirField!.GetValue(shared);
+
+        Assert.False(string.IsNullOrEmpty(cachePath));
+        Assert.EndsWith("store_cache.json", cachePath!, StringComparison.OrdinalIgnoreCase);
+        Assert.False(string.IsNullOrEmpty(imageDir));
+        Assert.EndsWith("store_images", imageDir!, StringComparison.OrdinalIgnoreCase);
     }
 
     // ---------------- image magic bytes ----------------
@@ -99,6 +139,83 @@ public class SteamStoreClientTests
         var result = await client.GetAppInfoAsync(new uint[] { 440 });
 
         Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task StoreApi_RedirectWithinTheApiHost_IsFollowed()
+    {
+        using var env = new TempEnv();
+        int call = 0;
+        var handler = new StubHandler(req =>
+        {
+            call++;
+            return call == 1
+                ? Redirect(new Uri("https://api.steampowered.com/IStoreBrowseService/GetItems/v1"))
+                : Respond(ApiOkBody(), finalUri: req.RequestUri);
+        });
+        using var client = env.NewClient(handler);
+
+        var result = await client.GetAppInfoAsync(new uint[] { 440 });
+
+        Assert.Equal(2, handler.Calls);
+        Assert.Equal("Team Fortress 2", result[440].Name);
+    }
+
+    [Fact]
+    public async Task StoreApi_RedirectToACdnHost_IsRejectedBeforeItIsRequested()
+    {
+        using var env = new TempEnv();
+        var handler = new StubHandler(_ =>
+            Redirect(new Uri("https://shared.steamstatic.com/store_item_assets/steal")));
+        using var client = env.NewClient(handler);
+
+        var result = await client.GetAppInfoAsync(new uint[] { 440 });
+
+        Assert.Empty(result);
+        Assert.Equal(1, handler.Calls);
+    }
+
+    [Fact]
+    public async Task StoreApi_RedirectChainWithinTheApiHost_IsFollowed()
+    {
+        using var env = new TempEnv();
+        int call = 0;
+        var handler = new StubHandler(req =>
+        {
+            call++;
+            return call switch
+            {
+                1 => Redirect(new Uri("https://api.steampowered.com/step1")),
+                2 => Redirect(new Uri("https://api.steampowered.com/step2")),
+                _ => Respond(ApiOkBody(), finalUri: req.RequestUri),
+            };
+        });
+        using var client = env.NewClient(handler);
+
+        var result = await client.GetAppInfoAsync(new uint[] { 440 });
+
+        Assert.Equal(3, handler.Calls);
+        Assert.Equal("Team Fortress 2", result[440].Name);
+    }
+
+    [Fact]
+    public async Task StoreApi_RedirectChainThatLeavesTheAllowlist_IsRejectedMidChain()
+    {
+        using var env = new TempEnv();
+        int call = 0;
+        var handler = new StubHandler(_ =>
+        {
+            call++;
+            return call == 1
+                ? Redirect(new Uri("https://api.steampowered.com/step1"))
+                : Redirect(new Uri("https://attacker.example/steal"));
+        });
+        using var client = env.NewClient(handler);
+
+        var result = await client.GetAppInfoAsync(new uint[] { 440 });
+
+        Assert.Empty(result);
+        Assert.Equal(2, handler.Calls);
     }
 
     // ---------------- image downloads ----------------
@@ -159,18 +276,56 @@ public class SteamStoreClientTests
         Assert.Equal(0, handler.Calls);
     }
 
+    [Fact]
+    public async Task ImageDownload_RedirectBetweenCdnHosts_IsFollowed()
+    {
+        using var env = new TempEnv();
+        int call = 0;
+        var handler = new StubHandler(req =>
+        {
+            call++;
+            return call == 1
+                ? Redirect(new Uri("https://cdn.cloudflare.steamstatic.com/steam/apps/440/header.jpg"))
+                : Respond(PngBytes(), "image/png", req.RequestUri);
+        });
+        using var client = env.NewClient(handler);
+
+        var target = Path.Combine(env.ImageCacheDir, "header.jpg");
+        await client.DownloadImageToCacheAsync(CdnUrl, target);
+
+        Assert.Equal(2, handler.Calls);
+        Assert.True(File.Exists(target));
+    }
+
+    [Fact]
+    public async Task ImageDownload_RedirectOffTheAllowlist_NeverRequestsTheTarget()
+    {
+        using var env = new TempEnv();
+        var handler = new StubHandler(_ => Redirect(new Uri("https://attacker.example/steal")));
+        using var client = env.NewClient(handler);
+
+        var target = Path.Combine(env.ImageCacheDir, "header.jpg");
+        await client.DownloadImageToCacheAsync(CdnUrl, target);
+
+        Assert.Equal(1, handler.Calls);
+        Assert.False(File.Exists(target));
+    }
+
     // ---------------- store_cache.json ----------------
 
     [Fact]
     public async Task ConcurrentCacheSaves_ProduceOneValidFileWithoutTempLeftovers()
     {
         using var env = new TempEnv();
-        var handler = new StubHandler(req => Respond(ApiOkBody(), finalUri: req.RequestUri));
+        var handler = new StubHandler(req => req.RequestUri!.AbsolutePath.Contains("/IStoreBrowseService/")
+            ? Respond(ApiBodyWithHeader(), finalUri: req.RequestUri)
+            : Respond(PngBytes(), "image/png", req.RequestUri));
         using var client = env.NewClient(handler);
 
         var fetched = await client.GetAppInfoAsync(new uint[] { 440 });
         Assert.Equal("Team Fortress 2", fetched[440].Name);
 
+        await WaitForCachedImage(env.ImageCacheDir);
         await Task.WhenAll(Enumerable.Range(0, 10).Select(_ => client.SaveDiskCacheAsync()));
 
         var json = await File.ReadAllTextAsync(env.CachePath);
@@ -200,8 +355,7 @@ public class SteamStoreClientTests
 
         var json = await File.ReadAllTextAsync(env.CachePath);
         Assert.Contains("\"headerUrl\"", json, StringComparison.Ordinal);
-        var parsed = System.Text.Json.JsonSerializer.Deserialize(json,
-            CloudReEdit.Services.StoreCacheJsonContext.Default.StoreCache);
+        var parsed = JsonSerializer.Deserialize(json, StoreCacheJsonContext.Default.StoreCache);
 
         Assert.NotNull(parsed);
         Assert.NotNull(parsed!.Entries);
@@ -210,96 +364,82 @@ public class SteamStoreClientTests
         Assert.False(string.IsNullOrEmpty(parsed.Entries[440].HeaderUrl));
     }
 
-    // ---------------- helpers ----------------
-
-    /// <summary>Store API body without assets: the entry carries no header image,
-    /// so no background image download races the test.</summary>
-    private static string ApiOkBody()
-        => "{\"response\":{\"store_items\":[{\"appid\":440,\"name\":\"Team Fortress 2\"}]}}";
-
-    private static string ApiBodyWithHeader()
-        => "{\"response\":{\"store_items\":[{\"appid\":440,\"name\":\"Team Fortress 2\"," +
-           "\"assets\":{\"header\":\"header.jpg\"}}]}}";
-
-    private static byte[] PngBytes()
-        => new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02, 0x03 };
-
-    /// <summary>Waits for the fire-and-forget header download to publish its cached
-    /// file, so the temp directory is complete (and deletable) when the test ends.</summary>
-    private static async Task WaitForCachedImage(string imageDir)
+    [Fact]
+    public async Task CacheFileIn026Format_LoadsFreshCompleteEntriesWithoutAnApiCall()
     {
-        for (int i = 0; i < 100; i++)
-        {
-            if (Directory.Exists(imageDir) && Directory.GetFiles(imageDir, "*.jpg").Length > 0)
-                return;
-            await Task.Delay(50);
-        }
-        Assert.Fail($"no cached image appeared under \"{imageDir}\"");
+        using var env = new TempEnv();
+        Directory.CreateDirectory(env.Root);
+
+        var fresh = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ",
+            CultureInfo.InvariantCulture);
+        File.WriteAllText(env.CachePath,
+            "{\"entries\":{\"440\":{\"name\":\"Team Fortress 2\",\"headerUrl\":\"" + CdnUrl +
+            "\",\"fetchedUtc\":\"" + fresh + "\"}}}");
+
+        var handler = new StubHandler(req => req.RequestUri!.AbsolutePath.Contains("/IStoreBrowseService/")
+            ? Respond(ApiOkBody(), finalUri: req.RequestUri)
+            : Respond(PngBytes(), "image/png", req.RequestUri));
+        using var client = env.NewClient(handler);
+
+        var result = await client.GetAppInfoAsync(new uint[] { 440 });
+
+        Assert.Equal("Team Fortress 2", result[440].Name);
+        Assert.Equal(0, handler.ApiCalls);
+        await WaitForCachedImage(env.ImageCacheDir);
     }
 
-    /// <summary>Builds a response whose RequestMessage carries the URI the response
-    /// actually landed on - with a stub handler that stands in for the final URI
-    /// HttpClient would report after following redirects.</summary>
-    private static HttpResponseMessage Respond(byte[] body, string contentType, Uri? finalUri)
+    [Fact]
+    public async Task IncompleteCacheEntries_AreRefetchedAndDroppedFromTheCacheFile()
     {
-        var resp = new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new ByteArrayContent(body),
-        };
-        resp.Content.Headers.TryAddWithoutValidation("Content-Type", contentType);
-        if (finalUri != null)
-            resp.RequestMessage = new HttpRequestMessage(HttpMethod.Get, finalUri);
-        return resp;
+        using var env = new TempEnv();
+        Directory.CreateDirectory(env.Root);
+
+        var now = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ",
+            CultureInfo.InvariantCulture);
+        File.WriteAllText(env.CachePath,
+            "{\"entries\":{" +
+            "\"0\":{\"name\":\"\",\"fetchedUtc\":\"2026-06-12T15:10:32.2876917Z\"}," +
+            "\"570\":{\"name\":\"Stale Name\",\"fetchedUtc\":\"" + now + "\"}}}");
+
+        var handler = new StubHandler(req => req.RequestUri!.AbsolutePath.Contains("/IStoreBrowseService/")
+            ? Respond(RefetchedBody(), finalUri: req.RequestUri)
+            : Respond(PngBytes(), "image/png", req.RequestUri));
+        using var client = env.NewClient(handler);
+
+        var result = await client.GetAppInfoAsync(new uint[] { 0, 570 });
+
+        Assert.Equal(1, handler.ApiCalls);
+        Assert.Equal("Left 4 Dead 2", result[570].Name);
+        Assert.Equal("", result[0].Name);
+
+        await WaitForCachedImage(env.ImageCacheDir);
+        await client.SaveDiskCacheAsync();
+
+        var parsed = JsonSerializer.Deserialize(await File.ReadAllTextAsync(env.CachePath),
+            StoreCacheJsonContext.Default.StoreCache);
+
+        Assert.NotNull(parsed);
+        Assert.NotNull(parsed!.Entries);
+        Assert.Equal(new uint[] { 440 }, parsed.Entries.Keys.ToArray());
+        Assert.Equal("Team Fortress 2", parsed.Entries[440].Name);
     }
 
-    private static HttpResponseMessage Respond(string body, Uri? finalUri)
+    [Fact]
+    public async Task FetchedEntryWithoutHeader_IsShownButNeverPersisted()
     {
-        var resp = new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(body, Encoding.UTF8, "application/json"),
-        };
-        if (finalUri != null)
-            resp.RequestMessage = new HttpRequestMessage(HttpMethod.Get, finalUri);
-        return resp;
-    }
+        using var env = new TempEnv();
+        var handler = new StubHandler(req => Respond(ApiOkBody(), finalUri: req.RequestUri));
+        using var client = env.NewClient(handler);
 
-    private sealed class StubHandler : HttpMessageHandler
-    {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _respond;
-        private int _calls;
+        var result = await client.GetAppInfoAsync(new uint[] { 440 });
+        Assert.Equal("Team Fortress 2", result[440].Name);
 
-        public StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)
-            => _respond = respond;
+        await client.SaveDiskCacheAsync();
 
-        public int Calls => _calls;
+        var parsed = JsonSerializer.Deserialize(await File.ReadAllTextAsync(env.CachePath),
+            StoreCacheJsonContext.Default.StoreCache);
 
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            Interlocked.Increment(ref _calls);
-            var resp = _respond(request);
-            resp.RequestMessage ??= request;
-            return Task.FromResult(resp);
-        }
-    }
-
-    private sealed class TempEnv : IDisposable
-    {
-        public string Root { get; } = Path.Combine(
-            Path.GetTempPath(), "CloudReEdit_Store_" + Guid.NewGuid().ToString("N"));
-
-        public string CachePath => Path.Combine(Root, "store_cache.json");
-        public string ImageCacheDir => Path.Combine(Root, "store_images");
-
-        public SteamStoreClient NewClient(HttpMessageHandler handler)
-        {
-            Directory.CreateDirectory(Root);
-            return new SteamStoreClient(handler, CachePath, ImageCacheDir);
-        }
-
-        public void Dispose()
-        {
-            try { Directory.Delete(Root, recursive: true); } catch { }
-        }
+        Assert.NotNull(parsed);
+        Assert.Empty(parsed!.Entries);
     }
 }
