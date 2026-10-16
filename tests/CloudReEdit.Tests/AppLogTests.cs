@@ -6,7 +6,10 @@ namespace CloudReEdit.Tests;
 
 /// <summary>Tests for the rolling file logger. Every test points the logger at its
 /// own temp directory and shuts it down again, so nothing touches real AppData and
-/// no test can observe another test's files.</summary>
+/// no test can observe another test's files. Shares the "AppLog" collection with
+/// <see cref="SteamStoreClientLogTests"/> - both classes drive the process-wide
+/// logger, so xunit must not run them at the same time.</summary>
+[Collection("AppLog")]
 public class AppLogTests
 {
     private static string NewTempDir()

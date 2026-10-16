@@ -44,6 +44,9 @@ public sealed class S3Provider : ICloudProvider, IDisposable
 
         _baseUri = new Uri(ep, UriKind.Absolute);
         _basePath = _baseUri.AbsolutePath.TrimEnd('/');
+        if (_baseUri.Scheme == Uri.UriSchemeHttp)
+            AppLog.Warn("cloud",
+                "storage endpoint uses plain http:// - requests to it are sent unencrypted");
         _http = handler == null
             ? new HttpClient { Timeout = TimeSpan.FromSeconds(60) }
             : new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(60) };
@@ -51,6 +54,11 @@ public sealed class S3Provider : ICloudProvider, IDisposable
 
     public string DisplayName => "S3 / R2";
     public bool CanWrite => true;
+
+    /// <summary>True when the credentials' endpoint is explicitly <c>http://</c>.
+    /// An endpoint without a scheme is normalized to https, so only an explicit
+    /// plain-http endpoint counts here.</summary>
+    public bool UsesInsecureEndpoint => _baseUri.Scheme == Uri.UriSchemeHttp;
 
     private string ObjectKey(string accountId)
     {

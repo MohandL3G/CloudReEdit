@@ -391,12 +391,83 @@ public class SaveTransactionTests
         Assert.Equal(60, written.PerDevice[0].Days[20340]);
     }
 
+    [Fact]
+    public async Task FreshSteamCheck_SteamStartedDuringSave_AbortsWithoutAnyMutation()
+    {
+        using var env = Setup(out var scope, out var paths, out var fake, out var beforeLocal, out var beforeVdf);
+        byte[] cloudBefore = Encoding.UTF8.GetBytes(
+            "{\"456\":{\"playtime\":" + MakeModelJson(77, 77, 999) + "}}");
+        fake.Blob = cloudBefore;
+
+        int calls = 0;
+        var report = await Run(scope, paths, fake, total: 150, steamRunning: false,
+            isSteamRunningNow: () => { calls++; return true; });
+
+        Assert.Equal(SaveOutcome.NotSaved, report.Outcome);
+        Assert.Equal(1, calls);
+        Assert.Null(report.BackupDir);
+        Assert.False(Directory.Exists(paths.BackupRoot));
+        Assert.Contains(report.Messages,
+            m => m.Contains("Steam started while saving", StringComparison.Ordinal));
+        Assert.Equal(beforeLocal, File.ReadAllBytes(paths.LocalStatsPath));
+        Assert.Equal(beforeVdf, File.ReadAllBytes(paths.VdfPath));
+        Assert.Equal(cloudBefore, fake.Blob);
+        Assert.Equal(CopyState.NotAttempted,
+            report.Copies.First(c => c.Target == CopyTarget.Vdf).State);
+        Assert.Equal(CopyState.NotAttempted,
+            report.Copies.First(c => c.Target == CopyTarget.LocalJson).State);
+        Assert.Equal(CopyState.NotAttempted,
+            report.Copies.First(c => c.Target == CopyTarget.CloudBlob).State);
+    }
+
+    [Fact]
+    public async Task FreshSteamCheck_RunsExactlyOnce_AfterAPreflightThatPassed()
+    {
+        using var env = Setup(out var scope, out var paths, out var fake, out _, out _);
+
+        int calls = 0;
+        var report = await Run(scope, paths, fake, total: 150, steamRunning: false,
+            isSteamRunningNow: () => { calls++; return false; });
+
+        Assert.Equal(SaveOutcome.SavedVerified, report.Outcome);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task FreshSteamCheck_IsSkippedWhenPreflightAlreadyAborted()
+    {
+        using var env = Setup(out var scope, out var paths, out var fake, out var beforeLocal, out var beforeVdf);
+
+        int calls = 0;
+        var report = await Run(scope, paths, fake, total: 150, steamRunning: true,
+            isSteamRunningNow: () => { calls++; return true; });
+
+        Assert.Equal(SaveOutcome.NotSaved, report.Outcome);
+        Assert.Equal(0, calls);
+        Assert.Null(report.BackupDir);
+        Assert.Equal(beforeLocal, File.ReadAllBytes(paths.LocalStatsPath));
+        Assert.Equal(beforeVdf, File.ReadAllBytes(paths.VdfPath));
+    }
+
+    [Fact]
+    public async Task FreshSteamCheck_ThrowingProbe_DoesNotBlockTheSave()
+    {
+        using var env = Setup(out var scope, out var paths, out var fake, out _, out _);
+
+        var report = await Run(scope, paths, fake, total: 150, steamRunning: false,
+            isSteamRunningNow: () => throw new InvalidOperationException("probe failure"));
+
+        Assert.Equal(SaveOutcome.SavedVerified, report.Outcome);
+    }
+
     // ---------------- helpers ----------------
 
     private static async Task<SaveReport> Run(SaveScope scope, SavePaths paths,
-        CloudReEdit.Services.Cloud.ICloudProvider? cloud, long total, bool steamRunning)
+        CloudReEdit.Services.Cloud.ICloudProvider? cloud, long total, bool steamRunning,
+        Func<bool>? isSteamRunningNow = null)
     {
-        var txn = new SaveTransaction(scope, paths, cloud, total, 1700000000, steamRunning);
+        var txn = new SaveTransaction(scope, paths, cloud, total, 1700000000, steamRunning,
+            isSteamRunningNow);
         return await txn.RunAsync();
     }
 

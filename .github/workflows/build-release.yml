@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to tag the release (e.g. 0.1.0)'
+        description: 'Version to tag the release (e.g. 0.2.7)'
         required: false
-        default: '0.1.0'
+        default: '0.2.7'
       release_notes:
         description: 'Optional release notes (plain text)'
         required: false

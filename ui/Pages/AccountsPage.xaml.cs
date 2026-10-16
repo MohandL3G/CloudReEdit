@@ -122,6 +122,7 @@ public partial class AccountsPage : Page
             File.Exists(SteamDetector.GetConfigFilePath()),
             SteamDetector.ReadConfig());
         ProviderText.Text = ProviderStatus.Text(result.State, result.DisplayName, result.Error);
+        ProviderWarningBar.IsOpen = result.InsecureEndpoint;
     }
 
     private void UpdateSteamStatus()

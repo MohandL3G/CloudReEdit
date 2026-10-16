@@ -1,0 +1,34 @@
+# Monthly dependency updates. Minor/patch bumps are grouped so the app project,
+# the test project and the Actions used by the release workflow each get at most
+# one PR per month instead of one per dependency.
+version: 2
+updates:
+  - package-ecosystem: "nuget"
+    directory: "/ui"
+    schedule:
+      interval: "monthly"
+    groups:
+      nuget-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "nuget"
+    directory: "/tests/CloudReEdit.Tests"
+    schedule:
+      interval: "monthly"
+    groups:
+      nuget-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      github-actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
