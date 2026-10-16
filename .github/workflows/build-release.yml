@@ -43,7 +43,7 @@ jobs:
         run: dotnet publish ui/CloudReEdit.csproj -c Release
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: CloudReEdit
           path: ui/bin/Release/net8.0-windows/win-x64/publish/CloudReEdit.exe
